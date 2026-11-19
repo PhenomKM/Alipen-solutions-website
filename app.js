@@ -103,6 +103,11 @@ const QuoteBasket = {
         el.style.display = 'none';
       }
     });
+    document.querySelectorAll('.mobile-quote-shortcut').forEach(el => {
+      el.setAttribute('aria-label', count
+        ? `Request a quote, ${count} item${count === 1 ? '' : 's'} in basket`
+        : 'Request a quote, basket is empty');
+    });
   }
 };
 

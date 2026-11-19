@@ -290,6 +290,11 @@ ul, ol {
   border-radius: var(--radius-full);
 }
 
+/* Compact quote basket shortcut appears only beside the mobile menu control. */
+.mobile-quote-shortcut {
+  display: none;
+}
+
 /* Mobile Toggle */
 .mobile-nav-toggle {
   display: none;
@@ -1683,6 +1688,47 @@ ul, ol {
 
   .mobile-nav-toggle {
     display: flex;
+  }
+
+  .header-actions {
+    gap: 0.65rem;
+  }
+
+  .mobile-quote-shortcut {
+    position: relative;
+    display: inline-flex;
+    width: 38px;
+    height: 38px;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 38px;
+    border: 1px solid rgba(22, 82, 160, 0.18);
+    border-radius: var(--radius-md);
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
+  }
+
+  .mobile-quote-shortcut:hover,
+  .mobile-quote-shortcut:focus-visible {
+    background: #DBEAFE;
+    color: var(--color-primary-dark);
+  }
+
+  .mobile-quote-shortcut:focus-visible {
+    outline: 3px solid rgba(22, 82, 160, 0.28);
+    outline-offset: 2px;
+  }
+
+  .mobile-quote-shortcut .quote-badge-count {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    min-width: 19px;
+    height: 19px;
+    padding: 0 4px;
+    border: 2px solid var(--color-white);
+    font-size: 0.68rem;
+    line-height: 1;
   }
 
   .section {

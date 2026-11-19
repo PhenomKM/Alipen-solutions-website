@@ -38,15 +38,17 @@ See [Supabase's PostgreSQL connection guide](https://supabase.com/docs/guides/da
 4. Return to Resend and run **Verify**. Wait until sending is marked verified. Resend's required records and status are specific to your domain.
 5. Under **API Keys**, create a key that can send email. Store it as `RESEND_API_KEY`; never commit it.
 6. Set `MAIL_FROM` to a sender address on the verified domain, for example `Alipen Quotes <quotes@send.yourdomain.example>`.
-7. Set `ADMIN_EMAIL` to the inbox that should receive quote notifications.
+7. Set `ADMIN_EMAIL` to `kayvo18@gmail.com` for Alipen quote notifications.
 
 Without a configured key/from address, or if Resend rejects a message, the quote stays saved and the API reports email delivery as `not_configured` or `failed`. A successful API response is reported as `accepted`, meaning Resend accepted the message for delivery; it does not guarantee inbox placement. The customer sees that status and is asked to keep their quote reference when email was not accepted.
+
+When delivery fails, Render logs include the notification type, quote reference, HTTP status, and a safe Resend error code. Raw Resend response text, recipients, and credentials are excluded. Check Render's **Logs** and Resend's **Emails/Logs** for the same submission time and reference. In Render's **Environment** settings, make sure `RESEND_API_KEY`, `MAIL_FROM`, and `ADMIN_EMAIL` are present; `ADMIN_EMAIL` should be `kayvo18@gmail.com`. Do not copy the example sender address: set `MAIL_FROM` to an address on a domain already verified for sending in your Resend account.
 
 See [Resend's domain setup](https://resend.com/docs/dashboard/domains/introduction) and [email API](https://resend.com/docs/api-reference/emails/send-email) documentation for the current dashboard workflow and API rules.
 
 ## 3. Prepare the private GitHub repository
 
-Create a **private** repository on GitHub. Do not upload `.env`, database files, real credentials, or customer records. `.gitignore` excludes those local files; `.env.example` contains placeholders only.
+Create a **private** repository on GitHub. Do not upload `.env`, database files, real credentials, or customer records. `.gitignore` excludes those local files; `.env.example` contains placeholders for credentials and sender values.
 
 From PowerShell in the project directory, after creating the empty private repo, use:
 
@@ -78,7 +80,7 @@ Replace the remote URL with the URL shown by GitHub. Review `git status` before 
    | `DATABASE_URL` | Supabase Session pooler URL, including password and SSL mode |
    | `RESEND_API_KEY` | Secret key from Resend |
    | `MAIL_FROM` | Sender address on the verified Resend domain |
-   | `ADMIN_EMAIL` | Admin notification inbox |
+   | `ADMIN_EMAIL` | `kayvo18@gmail.com` |
    | `ADMIN_USERNAME` | Private administrator login name |
    | `ADMIN_PASSWORD_HASH` | Argon2id hash generated with the command above |
    | `SITE_URL` | The assigned HTTPS URL, e.g. `https://alipen-website.onrender.com` |

@@ -1,4 +1,5 @@
 import http.client
+import io
 import json
 import re
 import threading
@@ -271,21 +272,26 @@ class ServerTests(unittest.TestCase):
     def test_resend_failure_does_not_undo_saved_quote(self):
         server.RESEND_API_KEY = 'test-key'
         server.MAIL_FROM = 'Alipen <test@example.com>'
-        server.ADMIN_EMAIL = 'admin@example.com'
+        server.ADMIN_EMAIL = 'kayvo18@gmail.com'
 
         def resend_failure(*args, **kwargs):
-            raise urllib.error.HTTPError('https://api.resend.com/emails', 403, 'unverified', {}, None)
+            body = json.dumps({'name': 'validation_error', 'message': 'Rejected customer@example.com'}).encode()
+            raise urllib.error.HTTPError('https://api.resend.com/emails', 403, 'unverified', {}, io.BytesIO(body))
 
-        with patch.object(server.urllib.request, 'urlopen', side_effect=resend_failure):
+        with self.assertLogs('server', level='WARNING') as logs, patch.object(server.urllib.request, 'urlopen', side_effect=resend_failure) as send:
             status, body, _ = self.request('POST', '/api/quotes', self.valid_payload())
         result = json.loads(body)
         self.assertEqual(status, 201)
         self.assertEqual(result['emailDelivery'], {'admin': 'failed', 'customer': 'failed'})
+        self.assertEqual(send.call_count, 2)
+        self.assertTrue(any('http_status=403' in line and 'validation_error' in line for line in logs.output))
+        self.assertNotIn('customer@example.com', '\n'.join(logs.output))
+        self.assertNotIn('test-key', '\n'.join(logs.output))
 
     def test_resend_success_is_reported_only_after_accepted_response(self):
         server.RESEND_API_KEY = 'test-key'
         server.MAIL_FROM = 'Alipen <test@example.com>'
-        server.ADMIN_EMAIL = 'admin@example.com'
+        server.ADMIN_EMAIL = 'kayvo18@gmail.com'
 
         class AcceptedResponse:
             status = 200
@@ -300,8 +306,26 @@ class ServerTests(unittest.TestCase):
             result = server.send_quote_emails(self.valid_payload(), 'ALIPEN-ABC123')
         self.assertEqual(result, {'admin': 'accepted', 'customer': 'accepted'})
         self.assertEqual(send.call_count, 2)
-        self.assertEqual(send.call_args_list[0].args[0].full_url, 'https://api.resend.com/emails')
-        self.assertEqual(send.call_args_list[0].args[0].headers['Authorization'], 'Bearer test-key')
+        admin_request, customer_request = [call.args[0] for call in send.call_args_list]
+        self.assertEqual(admin_request.full_url, 'https://api.resend.com/emails')
+        self.assertEqual(admin_request.method, 'POST')
+        self.assertEqual(admin_request.get_header('Authorization'), 'Bearer test-key')
+        self.assertEqual(admin_request.get_header('Content-type'), 'application/json')
+        admin_payload = json.loads(admin_request.data)
+        customer_payload = json.loads(customer_request.data)
+        self.assertEqual(admin_payload['from'], 'Alipen <test@example.com>')
+        self.assertEqual(admin_payload['to'], ['kayvo18@gmail.com'])
+        self.assertEqual(customer_payload['to'], ['test@example.com'])
+        self.assertEqual(customer_payload['from'], admin_payload['from'])
+        self.assertIn('ALIPEN-ABC123', admin_payload['subject'])
+        self.assertIn('ALIPEN-ABC123', customer_payload['text'])
+
+    def test_missing_resend_configuration_is_logged_and_quote_still_succeeds(self):
+        with self.assertLogs('server', level='ERROR') as logs:
+            status, body, _ = self.request('POST', '/api/quotes', self.valid_payload())
+        self.assertEqual(status, 201)
+        self.assertEqual(json.loads(body)['emailDelivery'], {'admin': 'not_configured', 'customer': 'not_configured'})
+        self.assertTrue(any('RESEND_API_KEY' in line and 'MAIL_FROM' in line for line in logs.output))
 
     def test_unexpected_email_exception_keeps_saved_quote_successful(self):
         with patch.object(server, 'send_quote_emails', side_effect=RuntimeError('provider error')):

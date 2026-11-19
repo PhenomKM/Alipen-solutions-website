@@ -4,6 +4,7 @@
 import http.server
 import json
 import html
+import logging
 import os
 import re
 import secrets
@@ -86,6 +87,8 @@ STATIC_EXTENSIONS = {
     '.svg', '.ico', '.woff', '.woff2', '.ttf',
 }
 EMAIL_RE = re.compile(r'^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$')
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseUnavailable(RuntimeError):
@@ -344,8 +347,37 @@ def email_layout(title, body):
     </div></body></html>'''
 
 
-def resend_email(to_address, subject, html_body, text_body):
+def _resend_error_code(response_body):
+    """Extract only a safe provider error identifier, never log response PII."""
+    try:
+        payload = json.loads(response_body.decode('utf-8', errors='replace'))
+    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+        return 'unparseable_error'
+    if isinstance(payload, dict):
+        code = payload.get('name') or payload.get('code')
+        if isinstance(code, str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', code):
+            return code
+    return 'api_error'
+
+
+def _log_resend_failure(notification_type, reference, status_code, error_code):
+    logger.warning(
+        'Resend email delivery failed notification=%s reference=%s http_status=%s error_code=%s',
+        notification_type, reference or 'unknown', status_code or 'unavailable', error_code,
+    )
+
+
+def resend_email(to_address, subject, html_body, text_body, notification_type='email', reference=''):
     if not RESEND_API_KEY or not MAIL_FROM:
+        missing = []
+        if not RESEND_API_KEY:
+            missing.append('RESEND_API_KEY')
+        if not MAIL_FROM:
+            missing.append('MAIL_FROM')
+        logger.warning(
+            'Resend email delivery not configured notification=%s reference=%s missing=%s',
+            notification_type, reference or 'unknown', ','.join(missing),
+        )
         return 'not_configured'
     payload = json.dumps({
         'from': MAIL_FROM,
@@ -368,8 +400,18 @@ def resend_email(to_address, subject, html_body, text_body):
         with urllib.request.urlopen(request, timeout=12) as response:
             if 200 <= response.status < 300:
                 return 'accepted'
+            error_body = response.read(8192)
+            _log_resend_failure(notification_type, reference, response.status, _resend_error_code(error_body))
             return 'failed'
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+    except urllib.error.HTTPError as error:
+        try:
+            error_body = error.read(8192)
+        except Exception:
+            error_body = b''
+        _log_resend_failure(notification_type, reference, error.code, _resend_error_code(error_body))
+        return 'failed'
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+        _log_resend_failure(notification_type, reference, None, type(error).__name__)
         return 'failed'
 
 
@@ -397,10 +439,26 @@ def send_quote_emails(data, reference):
                   f"Email: {data['email']}\nPhone: {data['phone']}\nRequirements: {data.get('requirements', '')}")
 
     if not RESEND_API_KEY or not MAIL_FROM:
+        missing = []
+        if not RESEND_API_KEY:
+            missing.append('RESEND_API_KEY')
+        if not MAIL_FROM:
+            missing.append('MAIL_FROM')
+        logger.error('Quote emails not sent reference=%s missing configuration=%s', reference, ','.join(missing))
         status = 'not_configured'
         return {'admin': status, 'customer': status}
-    admin_status = resend_email(ADMIN_EMAIL, f'New Alipen quote request — {reference}', admin_html, admin_text) if ADMIN_EMAIL else 'not_configured'
-    customer_status = resend_email(data['email'], f'Quote request received — {reference}', customer_html, customer_text)
+    if ADMIN_EMAIL:
+        admin_status = resend_email(
+            ADMIN_EMAIL, f'New Alipen quote request — {reference}', admin_html, admin_text,
+            notification_type='admin', reference=reference,
+        )
+    else:
+        logger.error('Admin quote notification not sent reference=%s missing configuration=ADMIN_EMAIL', reference)
+        admin_status = 'not_configured'
+    customer_status = resend_email(
+        data['email'], f'Quote request received — {reference}', customer_html, customer_text,
+        notification_type='customer', reference=reference,
+    )
     return {'admin': admin_status, 'customer': customer_status}
 
 
@@ -619,7 +677,8 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
 
         try:
             email_status = send_quote_emails(cleaned, reference)
-        except Exception:
+        except Exception as error:
+            logger.error('Quote email processing failed reference=%s exception_type=%s', reference, type(error).__name__)
             email_status = {'admin': 'failed', 'customer': 'failed'}
         self.send_json(201, {
             'success': True,
