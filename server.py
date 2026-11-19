@@ -14,13 +14,22 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict, deque
+from hashlib import sha256
 from email.utils import parseaddr
+from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 
 try:
     import psycopg
 except ImportError:  # Allows static pages and syntax checks before dependencies are installed.
     psycopg = None
+
+try:
+    from argon2 import PasswordHasher
+    from argon2.exceptions import InvalidHashError, VerificationError
+except ImportError:  # Login remains disabled until production dependencies are installed.
+    PasswordHasher = None
+    InvalidHashError = VerificationError = Exception
 
 
 DIRECTORY = Path(__file__).resolve().parent
@@ -47,16 +56,31 @@ SITE_URL = os.environ.get('SITE_URL', '').rstrip('/')
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '').strip()
 MAIL_FROM = os.environ.get('MAIL_FROM', '').strip()
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', '').strip()
+ADMIN_PASSWORD_HASH = os.environ.get('ADMIN_PASSWORD_HASH', '').strip()
+_password_hasher = PasswordHasher() if PasswordHasher is not None else None
 MAX_REQUEST_BYTES = 64 * 1024
 RATE_LIMIT_REQUESTS = 8
 RATE_LIMIT_WINDOW_SECONDS = 15 * 60
+ADMIN_LOGIN_LIMIT = 5
+ADMIN_SESSION_SECONDS = 8 * 60 * 60
 _rate_limit_lock = threading.Lock()
 _request_times = defaultdict(deque)
+_admin_login_lock = threading.Lock()
+_admin_login_attempts = defaultdict(deque)
+_admin_sessions_lock = threading.Lock()
+_admin_sessions = {}
 
 STATIC_ROOT_FILES = {
     'index.html', 'products.html', 'product-detail.html', 'about.html',
-    'contact.html', 'styles.css', 'app.js', 'products.js', 'script.js',
+    'contact.html', 'admin-login.html', 'styles.css', 'app.js', 'products.js', 'script.js',
+    'admin.css', 'admin.js',
 }
+ADMIN_STATUSES = {'received', 'in_progress', 'completed'}
+ADMIN_QUOTE_COLUMNS = (
+    'reference', 'name', 'facility', 'facility_type', 'county', 'phone',
+    'email', 'items', 'requirements', 'status', 'created_at',
+)
 STATIC_EXTENSIONS = {
     '.html', '.css', '.js', '.png', '.jpg', '.jpeg', '.webp', '.gif',
     '.svg', '.ico', '.woff', '.woff2', '.ttf',
@@ -115,6 +139,182 @@ def save_quote(data, ip_address):
             ip_address,
         ))
     return reference
+
+
+def admin_auth_configured():
+    return bool(
+        _password_hasher is not None
+        and ADMIN_USERNAME
+        and ADMIN_PASSWORD_HASH.startswith('$argon2id$')
+    )
+
+
+def verify_admin_credentials(username, password):
+    if not admin_auth_configured() or not isinstance(username, str) or not isinstance(password, str):
+        return False
+    try:
+        password_valid = _password_hasher.verify(ADMIN_PASSWORD_HASH, password)
+    except (InvalidHashError, VerificationError, TypeError, ValueError):
+        return False
+    return password_valid and secrets.compare_digest(username, ADMIN_USERNAME)
+
+
+def _session_key(session_token):
+    return sha256(session_token.encode('utf-8')).hexdigest()
+
+
+def create_admin_session(username):
+    now = time.time()
+    session_token = secrets.token_urlsafe(32)
+    csrf_token = secrets.token_urlsafe(32)
+    with _admin_sessions_lock:
+        expired = [key for key, item in _admin_sessions.items() if item['expires_at'] <= now]
+        for key in expired:
+            _admin_sessions.pop(key, None)
+        _admin_sessions[_session_key(session_token)] = {
+            'username': username,
+            'csrf_token': csrf_token,
+            'expires_at': now + ADMIN_SESSION_SECONDS,
+        }
+    return session_token, csrf_token
+
+
+def get_admin_session(handler):
+    try:
+        cookie = SimpleCookie(handler.headers.get('Cookie', ''))
+        morsel = cookie.get('alipen_admin_session')
+        session_token = morsel.value if morsel else ''
+    except CookieError:
+        return None
+    if not session_token:
+        return None
+    key = _session_key(session_token)
+    now = time.time()
+    with _admin_sessions_lock:
+        session = _admin_sessions.get(key)
+        if not session:
+            return None
+        if session['expires_at'] <= now:
+            _admin_sessions.pop(key, None)
+            return None
+        session['expires_at'] = now + ADMIN_SESSION_SECONDS
+        return dict(session)
+
+
+def delete_admin_session(handler):
+    try:
+        cookie = SimpleCookie(handler.headers.get('Cookie', ''))
+        morsel = cookie.get('alipen_admin_session')
+        session_token = morsel.value if morsel else ''
+    except CookieError:
+        return
+    if session_token:
+        with _admin_sessions_lock:
+            _admin_sessions.pop(_session_key(session_token), None)
+
+
+def is_admin_login_limited(ip_address, now=None):
+    now = now if now is not None else time.monotonic()
+    cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+    with _admin_login_lock:
+        attempts = _admin_login_attempts[ip_address]
+        while attempts and attempts[0] <= cutoff:
+            attempts.popleft()
+        if len(attempts) >= ADMIN_LOGIN_LIMIT:
+            return True
+        attempts.append(now)
+        return False
+
+
+def clear_admin_login_attempts(ip_address):
+    with _admin_login_lock:
+        _admin_login_attempts.pop(ip_address, None)
+
+
+def serialize_admin_quote(row):
+    quote = dict(zip(ADMIN_QUOTE_COLUMNS, row))
+    items = quote.get('items')
+    if isinstance(items, str):
+        try:
+            items = json.loads(items)
+        except json.JSONDecodeError:
+            items = []
+    quote['items'] = items if isinstance(items, list) else []
+    created_at = quote.get('created_at')
+    quote['created_at'] = created_at.isoformat() if hasattr(created_at, 'isoformat') else created_at
+    quote['status'] = quote.get('status') or 'received'
+    return quote
+
+
+def get_admin_overview():
+    with database_connection() as conn:
+        row = conn.execute('''
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status IS NULL OR status IN ('', 'new', 'received')) AS new,
+                COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress,
+                COUNT(*) FILTER (WHERE status = 'completed') AS completed
+            FROM quote_requests
+        ''').fetchone()
+        recent_rows = conn.execute(f'''
+            SELECT {', '.join(ADMIN_QUOTE_COLUMNS)}
+            FROM quote_requests
+            ORDER BY created_at DESC NULLS LAST, id DESC
+            LIMIT %s
+        ''', (5,)).fetchall()
+    return {
+        'total': row[0],
+        'new': row[1],
+        'in_progress': row[2],
+        'completed': row[3],
+        'recent': [serialize_admin_quote(item) for item in recent_rows],
+    }
+
+
+def list_admin_quotes(search='', status='all', page=1, page_size=20):
+    clauses = []
+    params = []
+    if search:
+        pattern = f'%{search}%'
+        clauses.append('(reference ILIKE %s OR name ILIKE %s OR facility ILIKE %s OR email ILIKE %s)')
+        params.extend((pattern, pattern, pattern, pattern))
+    if status == 'new':
+        clauses.append("(status IS NULL OR status IN ('', 'new', 'received'))")
+    elif status in ('in_progress', 'completed'):
+        clauses.append('status = %s')
+        params.append(status)
+
+    where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ''
+    offset = (page - 1) * page_size
+    with database_connection() as conn:
+        total = conn.execute(f'SELECT COUNT(*) FROM quote_requests{where_sql}', tuple(params)).fetchone()[0]
+        rows = conn.execute(f'''
+            SELECT {', '.join(ADMIN_QUOTE_COLUMNS)}
+            FROM quote_requests{where_sql}
+            ORDER BY created_at DESC NULLS LAST, id DESC
+            LIMIT %s OFFSET %s
+        ''', tuple(params + [page_size, offset])).fetchall()
+    return {'items': [serialize_admin_quote(row) for row in rows], 'total': total, 'page': page, 'pageSize': page_size}
+
+
+def get_admin_quote(reference):
+    with database_connection() as conn:
+        row = conn.execute(f'''
+            SELECT {', '.join(ADMIN_QUOTE_COLUMNS)}
+            FROM quote_requests WHERE reference = %s LIMIT 1
+        ''', (reference,)).fetchone()
+    return serialize_admin_quote(row) if row else None
+
+
+def update_admin_quote_status(reference, status):
+    with database_connection() as conn:
+        row = conn.execute('''
+            UPDATE quote_requests
+            SET status = %s
+            WHERE reference = %s
+            RETURNING reference, status
+        ''', (status, reference)).fetchone()
+    return {'reference': row[0], 'status': row[1]} if row else None
 
 
 def escape(value):
@@ -286,11 +486,24 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Referrer-Policy', 'strict-origin-when-cross-origin')
+        self.send_header('X-Frame-Options', 'DENY')
         super().end_headers()
 
     def do_GET(self):
         parsed = urllib.parse.urlsplit(self.path)
         path = urllib.parse.unquote(parsed.path)
+        if path in ('/admin', '/admin/'):
+            if not get_admin_session(self):
+                self.redirect('/admin/login')
+                return
+            self.serve_file('admin.html', admin_page=True)
+            return
+        if path in ('/admin/login', '/admin/login/'):
+            self.serve_file('admin-login.html', admin_page=True)
+            return
+        if path.startswith('/api/admin/'):
+            self.handle_admin_api('GET', path, parsed.query)
+            return
         if path == '/healthz':
             try:
                 with database_connection() as conn:
@@ -332,6 +545,13 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
         if not getattr(self, '_head_only', False):
             super().copyfile(source, outputfile)
 
+    def redirect(self, location):
+        self.send_response(303)
+        self.send_header('Location', location)
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
     @staticmethod
     def is_allowed_static_path(path):
         if not path.startswith('/') or '\\' in path or '\x00' in path:
@@ -351,7 +571,11 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
         return candidate.is_file()
 
     def do_POST(self):
-        if urllib.parse.urlsplit(self.path).path != '/api/quotes':
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        if path.startswith('/api/admin/'):
+            self.handle_admin_api('POST', path, '')
+            return
+        if path != '/api/quotes':
             self.send_json(404, {'success': False, 'message': 'Endpoint not found.'})
             return
         content_type = self.headers.get_content_type()
@@ -404,20 +628,207 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
             'emailDelivery': email_status,
         })
 
+    def do_PATCH(self):
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        if path.startswith('/api/admin/'):
+            self.handle_admin_api('PATCH', path, '')
+            return
+        self.send_json(404, {'success': False, 'message': 'Endpoint not found.'})
+
+    def request_is_same_origin(self):
+        origin = self.headers.get('Origin', '').strip().rstrip('/')
+        fetch_site = self.headers.get('Sec-Fetch-Site', '').lower()
+        if fetch_site and fetch_site not in ('same-origin', 'none'):
+            return False
+        if not origin:
+            return True
+        if SITE_URL:
+            expected_origin = SITE_URL
+        else:
+            scheme = self.headers.get('X-Forwarded-Proto', 'http').split(',')[0].strip()
+            expected_origin = f'{scheme}://{self.headers.get("Host", "")}'
+        return secrets.compare_digest(origin.lower(), expected_origin.lower().rstrip('/'))
+
+    def csrf_is_valid(self, session):
+        supplied = self.headers.get('X-CSRF-Token', '')
+        expected = session.get('csrf_token', '') if session else ''
+        return bool(supplied and expected and secrets.compare_digest(supplied, expected))
+
+    def secure_cookie(self):
+        forwarded_proto = self.headers.get('X-Forwarded-Proto', '').split(',')[0].strip().lower()
+        return SITE_URL.lower().startswith('https://') or forwarded_proto == 'https'
+
+    def read_admin_json(self):
+        if self.headers.get_content_type() != 'application/json':
+            self.send_json(415, {'success': False, 'message': 'Please submit JSON.'})
+            return None
+        try:
+            content_length = int(self.headers.get('Content-Length', '0'))
+        except (TypeError, ValueError):
+            self.send_json(400, {'success': False, 'message': 'Invalid request size.'})
+            return None
+        if content_length <= 0:
+            self.send_json(400, {'success': False, 'message': 'Request body is required.'})
+            return None
+        if content_length > 4096:
+            self.send_json(413, {'success': False, 'message': 'Request is too large.'})
+            return None
+        try:
+            body = self.rfile.read(content_length).decode('utf-8')
+            data = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.send_json(400, {'success': False, 'message': 'Invalid JSON submission.'})
+            return None
+        if not isinstance(data, dict):
+            self.send_json(400, {'success': False, 'message': 'Invalid request.'})
+            return None
+        return data
+
+    def handle_admin_api(self, method, path, query_string=''):
+        if method == 'POST' and path == '/api/admin/login':
+            if not self.request_is_same_origin():
+                self.send_json(403, {'success': False, 'message': 'Request origin was rejected.'})
+                return
+            ip_address = client_ip(self)
+            if is_admin_login_limited(ip_address):
+                self.send_json(429, {'success': False, 'message': 'Too many login attempts. Try again later.'})
+                return
+            data = self.read_admin_json()
+            if data is None:
+                return
+            username = data.get('username')
+            password = data.get('password')
+            if not admin_auth_configured():
+                self.send_json(503, {'success': False, 'message': 'Admin login is not configured on this server.'})
+                return
+            if (not isinstance(username, str) or not isinstance(password, str)
+                    or not username or len(username) > 120 or not password or len(password) > 1024):
+                self.send_json(401, {'success': False, 'message': 'Invalid username or password.'})
+                return
+            if not verify_admin_credentials(username, password):
+                self.send_json(401, {'success': False, 'message': 'Invalid username or password.'})
+                return
+
+            clear_admin_login_attempts(ip_address)
+            session_token, csrf_token = create_admin_session(ADMIN_USERNAME)
+            cookie = (f'alipen_admin_session={session_token}; Path=/; HttpOnly; SameSite=Strict; '
+                      f'Max-Age={ADMIN_SESSION_SECONDS}')
+            if self.secure_cookie():
+                cookie += '; Secure'
+            self.send_json(200, {
+                'success': True,
+                'username': ADMIN_USERNAME,
+                'csrfToken': csrf_token,
+            }, headers={'Set-Cookie': cookie})
+            return
+
+        session = get_admin_session(self)
+        if not session:
+            self.send_json(401, {'success': False, 'message': 'Admin authentication required.'})
+            return
+
+        if method in ('POST', 'PATCH'):
+            if not self.request_is_same_origin():
+                self.send_json(403, {'success': False, 'message': 'Request origin was rejected.'})
+                return
+            if not self.csrf_is_valid(session):
+                self.send_json(403, {'success': False, 'message': 'Invalid CSRF token.'})
+                return
+
+        if method == 'GET' and path == '/api/admin/session':
+            self.send_json(200, {'authenticated': True, 'username': session['username'], 'csrfToken': session['csrf_token']})
+            return
+
+        if method == 'GET' and path == '/api/admin/overview':
+            try:
+                self.send_json(200, get_admin_overview())
+            except Exception:
+                self.send_json(503, {'success': False, 'message': 'Dashboard data is temporarily unavailable.'})
+            return
+
+        if method == 'GET' and path == '/api/admin/quotes':
+            params = urllib.parse.parse_qs(query_string, keep_blank_values=True)
+            search = clean_text(params.get('search', [''])[0], 120)
+            status = params.get('status', ['all'])[0]
+            if status not in ('all', 'new', 'in_progress', 'completed'):
+                self.send_json(400, {'success': False, 'message': 'Invalid status filter.'})
+                return
+            try:
+                page = int(params.get('page', ['1'])[0])
+            except (TypeError, ValueError):
+                page = 0
+            if page < 1 or page > 1_000_000:
+                self.send_json(400, {'success': False, 'message': 'Invalid page number.'})
+                return
+            try:
+                self.send_json(200, list_admin_quotes(search, status, page))
+            except Exception:
+                self.send_json(503, {'success': False, 'message': 'Quote requests are temporarily unavailable.'})
+            return
+
+        if method == 'GET' and path.startswith('/api/admin/quotes/'):
+            reference = path[len('/api/admin/quotes/'):]
+            if reference and '/' not in reference:
+                try:
+                    quote = get_admin_quote(reference)
+                except Exception:
+                    self.send_json(503, {'success': False, 'message': 'Quote details are temporarily unavailable.'})
+                    return
+                if quote:
+                    self.send_json(200, quote)
+                else:
+                    self.send_json(404, {'success': False, 'message': 'Quote request not found.'})
+                return
+
+        if method == 'PATCH' and path.startswith('/api/admin/quotes/') and path.endswith('/status'):
+            reference = path[len('/api/admin/quotes/'):-len('/status')].strip('/')
+            if not reference or '/' in reference:
+                self.send_json(404, {'success': False, 'message': 'Quote request not found.'})
+                return
+            data = self.read_admin_json()
+            if data is None:
+                return
+            status = data.get('status')
+            if status not in ADMIN_STATUSES:
+                self.send_json(422, {'success': False, 'message': 'Invalid quote status.'})
+                return
+            try:
+                updated = update_admin_quote_status(reference, status)
+            except Exception:
+                self.send_json(503, {'success': False, 'message': 'Quote status could not be updated.'})
+                return
+            if not updated:
+                self.send_json(404, {'success': False, 'message': 'Quote request not found.'})
+                return
+            self.send_json(200, {'success': True, 'quote': updated})
+            return
+
+        if method == 'POST' and path == '/api/admin/logout':
+            delete_admin_session(self)
+            expired_cookie = 'alipen_admin_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'
+            if self.secure_cookie():
+                expired_cookie += '; Secure'
+            self.send_json(200, {'success': True}, headers={'Set-Cookie': expired_cookie})
+            return
+
+        self.send_json(404, {'success': False, 'message': 'Admin endpoint not found.'})
+
     def do_OPTIONS(self):
         self.send_error(405, 'Method not allowed')
 
-    def send_json(self, status, payload):
+    def send_json(self, status, payload, headers=None):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         if not getattr(self, '_head_only', False):
             self.wfile.write(body)
 
-    def serve_file(self, filename):
+    def serve_file(self, filename, admin_page=False):
         filepath = DIRECTORY / filename
         if not filepath.is_file():
             self.send_error(404, 'Not found')
@@ -426,7 +837,9 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(content)))
-        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Cache-Control', 'no-store' if admin_page else 'no-cache')
+        if admin_page:
+            self.send_header('Content-Security-Policy', "default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'")
         self.end_headers()
         if not getattr(self, '_head_only', False):
             self.wfile.write(content)

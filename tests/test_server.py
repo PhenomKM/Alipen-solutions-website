@@ -43,6 +43,8 @@ class ServerTests(unittest.TestCase):
 
     def setUp(self):
         server._request_times.clear()
+        server._admin_login_attempts.clear()
+        server._admin_sessions.clear()
         self.db_connections = []
 
         def connect(*args, **kwargs):
@@ -55,6 +57,104 @@ class ServerTests(unittest.TestCase):
         server.RESEND_API_KEY = ''
         server.MAIL_FROM = ''
         server.ADMIN_EMAIL = ''
+        server.ADMIN_USERNAME = ''
+        server.ADMIN_PASSWORD_HASH = ''
+
+    def admin_login(self, username='unit-admin', password='Test-Admin-Password-2026'):
+        from argon2 import PasswordHasher
+        server.ADMIN_USERNAME = username
+        server.ADMIN_PASSWORD_HASH = PasswordHasher().hash(password)
+        server._password_hasher = PasswordHasher()
+        return self.request('POST', '/api/admin/login', {'username': username, 'password': password}, {
+            'Origin': f'http://127.0.0.1:{self.port}',
+        })
+
+    def test_admin_requires_login_and_never_serves_dashboard_to_unauthenticated_users(self):
+        status, _, headers = self.request('GET', '/admin')
+        self.assertEqual(status, 303)
+        self.assertEqual(headers.get('Location'), '/admin/login')
+        status, body, _ = self.request('GET', '/admin/login')
+        self.assertEqual(status, 200)
+        self.assertIn(b'Admin sign in', body)
+        status, _, _ = self.request('GET', '/api/admin/quotes')
+        self.assertEqual(status, 401)
+        status, _, _ = self.request('GET', '/admin.html')
+        self.assertEqual(status, 404)
+
+    def test_admin_login_cookie_and_session_security(self):
+        status, body, headers = self.admin_login()
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertTrue(result['csrfToken'])
+        cookie = headers.get('Set-Cookie')
+        self.assertIn('HttpOnly', cookie)
+        self.assertIn('SameSite=Strict', cookie)
+        self.assertNotIn('Secure', cookie)  # local HTTP; production HTTPS sets this flag
+        with patch.object(server, 'get_admin_overview', return_value={'total': 0, 'new': 0, 'in_progress': 0, 'completed': 0, 'recent': []}):
+            status, _, _ = self.request('GET', '/api/admin/overview', headers={'Cookie': cookie.split(';', 1)[0]})
+        self.assertEqual(status, 200)
+
+    def test_admin_login_rejects_bad_credentials_and_limits_attempts(self):
+        self.admin_login()
+        cookie = None
+        # Keep the configured hash while submitting invalid credentials.
+        for _ in range(server.ADMIN_LOGIN_LIMIT):
+            status, _, _ = self.request('POST', '/api/admin/login', {'username': 'unit-admin', 'password': 'wrong'}, {
+                'Origin': f'http://127.0.0.1:{self.port}',
+            })
+            self.assertEqual(status, 401)
+        status, _, _ = self.request('POST', '/api/admin/login', {'username': 'unit-admin', 'password': 'wrong'}, {
+            'Origin': f'http://127.0.0.1:{self.port}',
+        })
+        self.assertEqual(status, 429)
+
+    def test_admin_quote_listing_search_detail_update_csrf_and_logout(self):
+        status, body, headers = self.admin_login()
+        self.assertEqual(status, 200)
+        cookie = headers.get('Set-Cookie').split(';', 1)[0]
+        csrf = json.loads(body)['csrfToken']
+        auth_headers = {'Cookie': cookie}
+        with patch.object(server, 'list_admin_quotes', return_value={'items': [], 'total': 0, 'page': 2, 'pageSize': 20}) as listing:
+            status, body, _ = self.request('GET', '/api/admin/quotes?search=Clinic&status=in_progress&page=2', headers=auth_headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['page'], 2)
+        listing.assert_called_once_with('Clinic', 'in_progress', 2)
+        with patch.object(server, 'get_admin_quote', return_value={'reference': 'ALIPEN-ABC123', 'items': []}):
+            status, body, _ = self.request('GET', '/api/admin/quotes/ALIPEN-ABC123', headers=auth_headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['reference'], 'ALIPEN-ABC123')
+        with patch.object(server, 'update_admin_quote_status', return_value={'reference': 'ALIPEN-ABC123', 'status': 'completed'}) as update:
+            status, _, _ = self.request('PATCH', '/api/admin/quotes/ALIPEN-ABC123/status', {'status': 'completed'}, auth_headers)
+            self.assertEqual(status, 403)
+            status, body, _ = self.request('PATCH', '/api/admin/quotes/ALIPEN-ABC123/status', {'status': 'completed'}, {
+                **auth_headers, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf,
+            })
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['quote']['status'], 'completed')
+        update.assert_called_once_with('ALIPEN-ABC123', 'completed')
+        status, _, _ = self.request('POST', '/api/admin/logout', {}, {
+            **auth_headers, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf,
+        })
+        self.assertEqual(status, 200)
+        status, _, _ = self.request('GET', '/api/admin/overview', headers=auth_headers)
+        self.assertEqual(status, 401)
+
+    def test_admin_production_cookie_secure_and_origin_validation(self):
+        server.SITE_URL = 'https://alipen.example'
+        from argon2 import PasswordHasher
+        server.ADMIN_USERNAME = 'unit-admin'
+        server.ADMIN_PASSWORD_HASH = PasswordHasher().hash('Test-Admin-Password-2026')
+        server._password_hasher = PasswordHasher()
+        status, _, headers = self.request('POST', '/api/admin/login', {
+            'username': 'unit-admin', 'password': 'Test-Admin-Password-2026',
+        }, {'Origin': 'https://alipen.example'})
+        self.assertEqual(status, 200)
+        self.assertIn('Secure', headers.get('Set-Cookie'))
+        status, _, _ = self.request('POST', '/api/admin/login', {
+            'username': 'unit-admin', 'password': 'Test-Admin-Password-2026',
+        }, {'Origin': 'https://evil.example'})
+        self.assertEqual(status, 403)
+        server.SITE_URL = ''
 
     def request(self, method, path, payload=None, headers=None, body=None):
         connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)

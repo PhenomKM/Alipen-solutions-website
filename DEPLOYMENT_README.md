@@ -13,6 +13,19 @@ This project uses one Render Python web service for the existing pages and quote
 
 The server creates `quote_requests` on startup. The existing local SQLite database is not migrated or read.
 
+## Admin dashboard and credentials
+
+The protected dashboard is available at `/admin`; sign in at `/admin/login`. There is no public registration. Configure `ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH` before deployment. The password hash must be Argon2id, and the original password is never stored in this project. Generate one locally without putting the password in shell history:
+
+```powershell
+python -m pip install -r requirements.txt
+python -c "from getpass import getpass; from argon2 import PasswordHasher; print(PasswordHasher().hash(getpass('Admin password: ')))"
+```
+
+Set the printed hash as `ADMIN_PASSWORD_HASH` and choose a private `ADMIN_USERNAME` in your local `.env` or Render environment settings. Keep `.env` private and never commit actual credentials. The dashboard uses an HttpOnly, SameSite Strict server-side session cookie, CSRF tokens for changes, HTTPS Secure cookies in production, and a per-IP login limit. Sessions are held in process memory and expire after inactivity; restarting the service signs admins out. Run a single web instance unless session storage is moved to a shared store.
+
+Quote records remain in the existing `quote_requests` table; this dashboard does not require a schema migration. Admin notifications continue through the existing Resend setup and go to `ADMIN_EMAIL` after the quote is saved. The quote endpoint sends one admin and one customer message per successfully saved submission.
+
 The quote endpoint accepts JSON requests up to 64 KiB and applies a basic in-memory limit of 8 submissions per IP per 15 minutes. This limiter resets on restart and does not coordinate across multiple instances; add an edge or shared-store rate limit before scaling out.
 
 See [Supabase's PostgreSQL connection guide](https://supabase.com/docs/guides/database/connecting-to-postgres) for current connection modes, pooler selection, and SSL guidance.
@@ -66,10 +79,14 @@ Replace the remote URL with the URL shown by GitHub. Review `git status` before 
    | `RESEND_API_KEY` | Secret key from Resend |
    | `MAIL_FROM` | Sender address on the verified Resend domain |
    | `ADMIN_EMAIL` | Admin notification inbox |
+   | `ADMIN_USERNAME` | Private administrator login name |
+   | `ADMIN_PASSWORD_HASH` | Argon2id hash generated with the command above |
    | `SITE_URL` | The assigned HTTPS URL, e.g. `https://alipen-website.onrender.com` |
 
    Render sets `PORT` for the running service. The server binds to `0.0.0.0` and reads that value automatically.
 5. Deploy. Confirm the service becomes healthy before testing quote submission.
+
+After deploy, visit `/admin/login` and sign in with the configured username and the password used to make the hash. Use the Requests page to search by reference, customer, facility, or email; filter by status; open a request to view its details; and update its status. Sign out using the account section.
 
 Render's [web service documentation](https://render.com/docs/web-services) covers Git integration, port binding, environment variables, and health checks.
 
@@ -78,9 +95,10 @@ Render's [web service documentation](https://render.com/docs/web-services) cover
 1. Open the Render URL and visit `/`, `/products`, `/products/contec-e12-ecg`, `/about`, and `/contact`.
 2. Open `/healthz`; expect HTTP 200 and `{"status":"ok"`. A database connectivity problem returns 503.
 3. Submit one clearly marked test quote using an inbox you control. Confirm a reference is shown, the row appears in Supabase's `quote_requests` table, and the admin/customer emails arrive.
-4. If email is unconfigured or rejected, the API response and confirmation dialog must say so; it must not say the emails were sent.
-5. Check that `/server.py`, `/.env`, `/.env.example`, `/requirements.txt`, `/README.md`, and `/alipen_quotes.db` return 404.
-6. Delete the test quote from Supabase after validation if it is no longer needed.
+4. Visit `/admin/login`, sign in, and confirm the request is listed. Test search, status filters, pagination, request details, status updates, and logout.
+5. If email is unconfigured or rejected, the API response and confirmation dialog must say so; it must not say the emails were sent.
+6. Check that `/server.py`, `/.env`, `/.env.example`, `/requirements.txt`, `/README.md`, and `/alipen_quotes.db` return 404.
+7. Delete the test quote from Supabase after validation if it is no longer needed.
 
 Example health request:
 
@@ -105,6 +123,9 @@ If the free limits are not suitable, provider entry pricing checked 19 November 
 - **Deploy fails importing psycopg:** check `requirements.txt` is committed and the build log completed `pip install -r requirements.txt`.
 - **`/healthz` returns 503:** check `DATABASE_URL`, URL-encoded database password, SSL mode, Supabase project state, and the exact session-pooler host/user/port copied from Supabase Connect.
 - **Quote submission returns 503:** inspect the Render application logs for startup/database failures. API responses deliberately do not expose database details or customer information.
+- **Admin login says it is not configured:** confirm both `ADMIN_USERNAME` and a valid Argon2id `ADMIN_PASSWORD_HASH` are set in Render, then redeploy/restart.
+- **Admin login fails:** recreate the Argon2id hash using the command above, update the Render value without surrounding quotes, and check that the username matches exactly.
+- **Admin pages show unavailable quote data:** verify the same Supabase PostgreSQL connection and `quote_requests` table used by public quote submissions.
 - **Quote is saved but email is not accepted:** inspect Resend's email logs; verify the API key, sender domain status, `MAIL_FROM`, recipient, and account limits. The saved quote reference remains valid.
 - **Resend accepted the messages but they do not arrive:** inspect Resend's email logs, spam/quarantine, and domain SPF/DKIM setup. `accepted` means the provider accepted the API request; it does not guarantee inbox placement.
 - **Product page image missing:** confirm the referenced file exists under `public/images/` and its path capitalization matches the catalog entry.

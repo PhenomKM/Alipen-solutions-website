@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base href="/" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Admin Sign In | Alipen Solutions</title>
+  <link rel="icon" type="image/png" href="public/images/favicon.png" />
+  <link rel="stylesheet" href="admin.css" />
+  <script src="admin.js" defer></script>
+</head>
+<body class="admin-login-page" data-admin-page="login">
+  <main class="login-shell">
+    <section class="login-card" aria-labelledby="loginTitle">
+      <img class="login-logo" src="public/images/logo.png" alt="Alipen Solutions Agency Ltd" />
+      <span class="login-eyebrow">SECURE STAFF ACCESS</span>
+      <h1 id="loginTitle">Admin sign in</h1>
+      <p class="login-intro">Sign in to manage incoming quote requests.</p>
+      <form id="adminLoginForm" class="login-form">
+        <label for="adminUsername">Username</label>
+        <input id="adminUsername" name="username" type="text" autocomplete="username" maxlength="120" required />
+        <label for="adminPassword">Password</label>
+        <input id="adminPassword" name="password" type="password" autocomplete="current-password" maxlength="1024" required />
+        <p id="loginError" class="form-message" role="alert" hidden></p>
+        <button id="loginButton" class="admin-button admin-button-primary login-submit" type="submit">Sign in securely</button>
+      </form>
+      <p class="login-footnote">Alipen Solutions Agency Ltd · Authorized staff only</p>
+    </section>
+  </main>
+</body>
+</html>

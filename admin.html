@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base href="/" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Quote Management | Alipen Solutions</title>
+  <link rel="icon" type="image/png" href="public/images/favicon.png" />
+  <link rel="stylesheet" href="admin.css" />
+  <script src="admin.js" defer></script>
+</head>
+<body class="admin-app" data-admin-page="dashboard">
+  <div class="admin-layout">
+    <aside id="adminSidebar" class="admin-sidebar">
+      <a class="admin-brand" href="/admin" aria-label="Alipen admin home">
+        <img src="public/images/logo.png" alt="Alipen Solutions Agency Ltd" />
+        <span><strong>Alipen</strong><small>ADMIN PORTAL</small></span>
+      </a>
+      <nav class="admin-nav" aria-label="Admin navigation">
+        <button type="button" class="admin-nav-link active" data-admin-view="overview">
+          <span class="nav-mark" aria-hidden="true">▦</span><span>Overview</span>
+        </button>
+        <button type="button" class="admin-nav-link" data-admin-view="quotes">
+          <span class="nav-mark" aria-hidden="true">▤</span><span>Quote requests</span>
+        </button>
+      </nav>
+      <div class="sidebar-foot">
+        <span class="secure-indicator"><i></i> Secure workspace</span>
+        <span class="sidebar-company">Alipen Solutions Agency Ltd</span>
+      </div>
+    </aside>
+
+    <div class="admin-main-column">
+      <header class="admin-topbar">
+        <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-label="Open navigation" aria-expanded="false">☰</button>
+        <div class="topbar-context"><span class="topbar-dot"></span> Quote management</div>
+        <div class="admin-account">
+          <span class="account-avatar" aria-hidden="true">A</span>
+          <span id="adminUsernameLabel" class="account-name">Administrator</span>
+          <button id="logoutButton" class="logout-button" type="button">Log out</button>
+        </div>
+      </header>
+
+      <main class="admin-content">
+        <p id="adminNotice" class="admin-notice" role="status" hidden></p>
+
+        <section id="overviewView" class="admin-view" aria-labelledby="overviewTitle">
+          <div class="page-heading">
+            <div><span class="page-eyebrow">OPERATIONS</span><h1 id="overviewTitle">Dashboard overview</h1><p>Track incoming procurement requests and follow-up progress.</p></div>
+            <button class="admin-button admin-button-primary" type="button" data-open-quotes>View all requests <span aria-hidden="true">→</span></button>
+          </div>
+          <div class="stats-grid" aria-label="Quote request totals">
+            <article class="stat-card stat-total"><span class="stat-icon" aria-hidden="true">▤</span><span class="stat-label">Total requests</span><strong id="totalCount" class="stat-value">—</strong><span class="stat-caption">All received enquiries</span></article>
+            <article class="stat-card stat-new"><span class="stat-icon" aria-hidden="true">✳</span><span class="stat-label">New requests</span><strong id="newCount" class="stat-value">—</strong><span class="stat-caption">Awaiting first review</span></article>
+            <article class="stat-card stat-progress"><span class="stat-icon" aria-hidden="true">◷</span><span class="stat-label">In progress</span><strong id="progressCount" class="stat-value">—</strong><span class="stat-caption">Currently being handled</span></article>
+            <article class="stat-card stat-complete"><span class="stat-icon" aria-hidden="true">✓</span><span class="stat-label">Completed</span><strong id="completedCount" class="stat-value">—</strong><span class="stat-caption">Closed requests</span></article>
+          </div>
+          <section class="admin-panel" aria-labelledby="recentTitle">
+            <div class="panel-heading"><div><h2 id="recentTitle">Recent quote requests</h2><p>Latest enquiries from healthcare facilities</p></div><button class="text-button" type="button" data-open-quotes>View all <span aria-hidden="true">→</span></button></div>
+            <div class="table-scroll"><table class="admin-table"><thead><tr><th>Reference</th><th>Customer</th><th>Facility</th><th>County</th><th>Status</th><th>Date received</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="recentRows"></tbody></table></div>
+            <p id="recentEmpty" class="empty-state" hidden>No quote requests have been submitted yet.</p>
+          </section>
+        </section>
+
+        <section id="quotesView" class="admin-view" aria-labelledby="quotesTitle" hidden>
+          <div class="page-heading">
+            <div><span class="page-eyebrow">CUSTOMER ENQUIRIES</span><h1 id="quotesTitle">Quote requests</h1><p>Search, review and update facility enquiries.</p></div>
+          </div>
+          <section class="admin-panel quote-list-panel">
+            <div class="quote-toolbar">
+              <label class="search-control"><span class="sr-only">Search quote requests</span><span aria-hidden="true">⌕</span><input id="quoteSearch" type="search" maxlength="120" placeholder="Search name, facility, email or reference" /></label>
+              <label class="status-filter"><span class="sr-only">Filter by status</span><select id="statusFilter"><option value="all">All statuses</option><option value="new">New</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label>
+            </div>
+            <div class="table-scroll"><table class="admin-table"><thead><tr><th>Reference</th><th>Customer</th><th>Facility</th><th>County</th><th>Status</th><th>Date received</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="quoteRows"></tbody></table></div>
+            <p id="quotesEmpty" class="empty-state" hidden>No quote requests match these filters.</p>
+            <div class="pagination"><span id="pageSummary" class="page-summary">—</span><div><button id="previousPage" class="page-button" type="button" disabled>← Previous</button><button id="nextPage" class="page-button" type="button" disabled>Next →</button></div></div>
+          </section>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="quoteDetailDialog" class="detail-dialog" aria-labelledby="detailTitle">
+    <div class="dialog-heading"><div><span class="page-eyebrow">QUOTE REQUEST</span><h2 id="detailTitle">Request details</h2></div><button id="closeDetail" class="dialog-close" type="button" aria-label="Close details">×</button></div>
+    <div id="detailLoading" class="detail-loading">Loading request details…</div>
+    <div id="detailContent" hidden>
+      <div class="detail-reference"><span>Reference</span><strong id="detailReference"></strong><span id="detailStatusBadge"></span></div>
+      <div class="detail-grid">
+        <div class="detail-field"><span>Customer name</span><strong id="detailName"></strong></div>
+        <div class="detail-field"><span>Facility</span><strong id="detailFacility"></strong></div>
+        <div class="detail-field"><span>Facility type</span><strong id="detailFacilityType"></strong></div>
+        <div class="detail-field"><span>County</span><strong id="detailCounty"></strong></div>
+        <div class="detail-field"><span>Phone</span><strong id="detailPhone"></strong></div>
+        <div class="detail-field"><span>Email</span><strong id="detailEmail"></strong></div>
+        <div class="detail-field"><span>Submitted</span><strong id="detailDate"></strong></div>
+      </div>
+      <section class="detail-section"><h3>Requested items</h3><ul id="detailItems" class="detail-items"></ul></section>
+      <section class="detail-section"><h3>Additional requirements</h3><p id="detailRequirements" class="requirements-text"></p></section>
+      <form id="statusForm" class="status-editor"><label for="detailStatus">Update request status</label><div><select id="detailStatus"><option value="received">New</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select><button id="saveStatus" class="admin-button admin-button-primary" type="submit">Save status</button></div></form>
+    </div>
+  </dialog>
+</body>
+</html>

@@ -4,7 +4,7 @@ The website quote API stores requests in Supabase PostgreSQL and sends transacti
 
 For local setup, production environment variables, Render configuration, GitHub commands, and troubleshooting, see [DEPLOYMENT_README.md](DEPLOYMENT_README.md).
 
-Required settings are `DATABASE_URL`, `RESEND_API_KEY`, `MAIL_FROM`, `ADMIN_EMAIL`, and `SITE_URL`. Copy `.env.example` to `.env` for local work and replace the placeholders. Never commit `.env`, database connection strings, API keys, or quote/customer records.
+Required settings are `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, and `SITE_URL`. Configure `RESEND_API_KEY`, `MAIL_FROM`, and `ADMIN_EMAIL` for quote email notifications. Copy `.env.example` to `.env` for local work and replace the placeholders. See [DEPLOYMENT_README.md](DEPLOYMENT_README.md#admin-dashboard-and-credentials) for generating the Argon2id admin hash and the Render setup. Never commit `.env`, database connection strings, API keys, admin credentials, or quote/customer records.
 
 Install the PostgreSQL driver and start the app with:
 
