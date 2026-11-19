@@ -7,6 +7,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -16,6 +17,8 @@ import server
 class FakeConnection:
     def __init__(self):
         self.statements = []
+        self.fetchone_result = None
+        self.fetchall_result = []
 
     def __enter__(self):
         return self
@@ -26,6 +29,12 @@ class FakeConnection:
     def execute(self, query, params=None):
         self.statements.append((query, params))
         return self
+
+    def fetchone(self):
+        return self.fetchone_result
+
+    def fetchall(self):
+        return self.fetchall_result
 
 
 class ServerTests(unittest.TestCase):
@@ -140,6 +149,105 @@ class ServerTests(unittest.TestCase):
         status, _, _ = self.request('GET', '/api/admin/overview', headers=auth_headers)
         self.assertEqual(status, 401)
 
+    def test_secondary_admin_authenticates_but_cannot_manage_other_accounts(self):
+        from argon2 import PasswordHasher
+        password = 'Additional-Admin-Password-2026'
+        account_timestamp = datetime.now(timezone.utc)
+        hasher = PasswordHasher()
+        server.ADMIN_USERNAME = 'primary-admin'
+        server.ADMIN_PASSWORD_HASH = hasher.hash('Primary-Password-2026')
+        server._password_hasher = hasher
+        with patch.object(server, 'get_admin_user_for_authentication', return_value=(44, 'staff-admin', hasher.hash(password), True, account_timestamp)):
+            status, body, headers = self.request('POST', '/api/admin/login', {
+                'username': 'staff-admin', 'password': password,
+            }, {'Origin': f'http://127.0.0.1:{self.port}'})
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertFalse(result['isPrimary'])
+        self.assertNotIn('password_hash', body.decode())
+        cookie = headers.get('Set-Cookie').split(';', 1)[0]
+        auth_headers = {'Cookie': cookie}
+        mutation_headers = {
+            **auth_headers, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': result['csrfToken'],
+        }
+        with patch.object(server, 'get_admin_user_session_state', return_value=(True, account_timestamp)):
+            status, body, _ = self.request('GET', '/api/admin/session', headers=auth_headers)
+            self.assertEqual(status, 200)
+            self.assertFalse(json.loads(body)['isPrimary'])
+            status, _, _ = self.request('GET', '/api/admin/users', headers=auth_headers)
+            self.assertEqual(status, 403)
+            status, _, _ = self.request('POST', '/api/admin/users', {'username': 'other-admin', 'password': password}, mutation_headers)
+            self.assertEqual(status, 403)
+            status, _, _ = self.request('PATCH', '/api/admin/users/45', {'is_active': False}, mutation_headers)
+            self.assertEqual(status, 403)
+
+    def test_primary_admin_can_create_rename_reset_and_deactivate_accounts(self):
+        from argon2 import PasswordHasher
+        hasher = PasswordHasher()
+        status, login_body, headers = self.admin_login()
+        self.assertEqual(status, 200)
+        cookie = headers.get('Set-Cookie').split(';', 1)[0]
+        auth_headers = {
+            'Cookie': cookie,
+            'Origin': f'http://127.0.0.1:{self.port}',
+            'X-CSRF-Token': json.loads(login_body)['csrfToken'],
+        }
+        safe_user = {'id': 23, 'username': 'clinic-admin', 'is_active': True, 'created_at': '2026-01-01T00:00:00+00:00'}
+        with patch.object(server, 'list_admin_users', return_value=[safe_user]):
+            status, body, _ = self.request('GET', '/api/admin/users', headers={'Cookie': cookie})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['users'], [safe_user])
+        self.assertNotIn('password_hash', body.decode())
+
+        status, _, _ = self.request('POST', '/api/admin/users', {
+            'username': 'clinic-admin', 'password': 'New-Clinic-Admin-Password-2026',
+        }, {'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}'})
+        self.assertEqual(status, 403)
+        with patch.object(server, 'create_admin_user', return_value=safe_user) as create_user:
+            status, body, _ = self.request('POST', '/api/admin/users', {
+                'username': 'clinic-admin', 'password': 'New-Clinic-Admin-Password-2026',
+            }, auth_headers)
+        self.assertEqual(status, 201)
+        create_hash = create_user.call_args.args[1]
+        self.assertTrue(create_hash.startswith('$argon2id$'))
+        self.assertTrue(hasher.verify(create_hash, 'New-Clinic-Admin-Password-2026'))
+        self.assertNotIn(create_hash, body.decode())
+        self.assertNotIn('New-Clinic-Admin-Password-2026', body.decode())
+
+        with patch.object(server, 'update_admin_user', return_value={**safe_user, 'username': 'clinic-admin-2', 'is_active': False}) as update_user, \
+             patch.object(server, 'revoke_admin_sessions') as revoke:
+            status, body, _ = self.request('PATCH', '/api/admin/users/23', {
+                'username': 'clinic-admin-2', 'password': 'Reset-Clinic-Admin-Password-2026', 'is_active': False,
+            }, auth_headers)
+        self.assertEqual(status, 200)
+        update_args = update_user.call_args.args
+        self.assertEqual(update_args[0], 23)
+        self.assertEqual(update_args[1], 'clinic-admin-2')
+        self.assertTrue(hasher.verify(update_args[2], 'Reset-Clinic-Admin-Password-2026'))
+        self.assertFalse(update_args[3])
+        revoke.assert_called_once_with(23)
+        self.assertNotIn('password_hash', body.decode())
+        self.assertNotIn('Reset-Clinic-Admin-Password-2026', body.decode())
+
+    def test_password_reset_or_deactivation_invalidates_existing_secondary_sessions(self):
+        from datetime import timedelta
+        timestamp = datetime.now(timezone.utc)
+        token, _ = server.create_admin_session({
+            'id': 91, 'username': 'staff-account', 'is_primary': False, 'updated_at': timestamp,
+        })
+        handler = SimpleNamespace(headers={'Cookie': f'alipen_admin_session={token}'})
+        with patch.object(server, 'get_admin_user_session_state', return_value=(True, timestamp)):
+            self.assertIsNotNone(server.get_admin_session(handler))
+        with patch.object(server, 'get_admin_user_session_state', return_value=(True, timestamp + timedelta(seconds=1))):
+            self.assertIsNone(server.get_admin_session(handler))
+
+        token, _ = server.create_admin_session({
+            'id': 92, 'username': 'disabled-account', 'is_primary': False, 'updated_at': timestamp,
+        })
+        handler = SimpleNamespace(headers={'Cookie': f'alipen_admin_session={token}'})
+        with patch.object(server, 'get_admin_user_session_state', return_value=(False, timestamp)):
+            self.assertIsNone(server.get_admin_session(handler))
+
     def test_admin_production_cookie_secure_and_origin_validation(self):
         server.SITE_URL = 'https://alipen.example'
         from argon2 import PasswordHasher
@@ -201,6 +309,39 @@ class ServerTests(unittest.TestCase):
     def test_database_initialization_creates_quote_table(self):
         server.init_database()
         self.assertIn('CREATE TABLE IF NOT EXISTS quote_requests', self.db_connections[0].statements[0][0])
+        self.assertTrue(any('CREATE TABLE IF NOT EXISTS admin_users' in statement for statement, _ in self.db_connections[0].statements))
+        self.assertTrue(any('CREATE UNIQUE INDEX IF NOT EXISTS admin_users_username_lower_unique' in statement for statement, _ in self.db_connections[0].statements))
+
+    def test_admin_user_database_helpers_return_only_safe_fields(self):
+        created_at = datetime.now(timezone.utc)
+        connection = FakeConnection()
+        connection.fetchone_result = (31, 'new-admin', True, created_at)
+        connection.fetchall_result = [(31, 'new-admin', True, created_at)]
+        server.psycopg = SimpleNamespace(connect=lambda *args, **kwargs: connection)
+
+        created = server.create_admin_user('new-admin', '$argon2id$private-hash')
+        self.assertEqual(created['username'], 'new-admin')
+        self.assertNotIn('password_hash', created)
+        self.assertNotIn('$argon2id$', json.dumps(created))
+        insert_sql, insert_params = connection.statements[-1]
+        self.assertIn('INSERT INTO admin_users', insert_sql)
+        self.assertIn('%s', insert_sql)
+        self.assertEqual(insert_params, ('new-admin', '$argon2id$private-hash'))
+
+        listed = server.list_admin_users()
+        self.assertEqual(listed[0]['username'], 'new-admin')
+        self.assertNotIn('password_hash', listed[0])
+        list_sql = connection.statements[-1][0]
+        self.assertIn('SELECT id, username, is_active, created_at', list_sql)
+        self.assertNotIn('password_hash', list_sql)
+
+        connection.fetchone_result = (31, 'renamed-admin', False, created_at)
+        updated = server.update_admin_user(31, username='renamed-admin', is_active=False)
+        self.assertFalse(updated['is_active'])
+        self.assertNotIn('password_hash', updated)
+        update_sql, update_params = connection.statements[-1]
+        self.assertIn('UPDATE admin_users SET', update_sql)
+        self.assertEqual(update_params, ('renamed-admin', False, 31))
 
     def test_static_assets_are_available_but_internal_files_are_not(self):
         status, body, _ = self.request('GET', '/public/images/catalogue/image_56.png')

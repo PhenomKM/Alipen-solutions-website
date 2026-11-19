@@ -142,6 +142,16 @@ button { cursor: pointer; }
 .status-editor > div { display: flex; gap: 9px; }
 .status-editor select { width: min(100%, 220px); }
 .admin-view { min-width: 0; }
+.user-create-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 12px; padding: 18px 20px 20px; }
+.user-create-form label, .admin-user-edit-form > label:not(.active-toggle) { display: grid; gap: 7px; color: #334155; font-size: 11px; font-weight: 700; }
+.user-create-form input, .admin-user-edit-form input:not([type="checkbox"]):not([type="hidden"]) { width: 100%; min-height: 42px; padding: 0 11px; border: 1px solid #cbd5e1; border-radius: 8px; outline: none; color: var(--admin-ink); }
+.user-create-form input:focus, .admin-user-edit-form input:focus { border-color: var(--admin-blue); box-shadow: 0 0 0 3px rgba(22, 82, 160, .12); }
+.admin-user-edit-form { display: grid; gap: 16px; padding: 20px 23px 23px; }
+.admin-user-edit-form label span { color: var(--admin-muted); font-weight: 400; }
+.admin-user-edit-form .active-toggle { display: flex; align-items: center; gap: 9px; color: #334155; font-size: 12px; font-weight: 600; }
+.active-toggle input { width: 17px; height: 17px; accent-color: var(--admin-blue); }
+.user-edit-actions { display: flex; justify-content: flex-end; gap: 9px; padding-top: 6px; }
+.user-edit-actions .admin-button:not(.admin-button-primary) { border: 1px solid var(--admin-line); background: #fff; color: #475569; }
 
 @media (max-width: 1050px) {
   .admin-layout { grid-template-columns: 220px minmax(0, 1fr); }
@@ -173,6 +183,9 @@ button { cursor: pointer; }
   .page-button { flex: 1; }
   .detail-grid { grid-template-columns: 1fr; gap: 13px; padding: 18px; }
   .dialog-heading, .detail-section, .detail-reference, .status-editor { padding-left: 18px; padding-right: 18px; }
+  .user-create-form { grid-template-columns: 1fr; padding: 15px; }
+  .user-create-form .admin-button { width: 100%; }
+  .admin-user-edit-form { padding: 18px; }
 }
 @media (max-width: 380px) {
   .login-card { padding: 28px 22px; }

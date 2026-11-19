@@ -65,6 +65,7 @@ RATE_LIMIT_REQUESTS = 8
 RATE_LIMIT_WINDOW_SECONDS = 15 * 60
 ADMIN_LOGIN_LIMIT = 5
 ADMIN_SESSION_SECONDS = 8 * 60 * 60
+ADMIN_USERNAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{2,119}$')
 _rate_limit_lock = threading.Lock()
 _request_times = defaultdict(deque)
 _admin_login_lock = threading.Lock()
@@ -125,6 +126,21 @@ def init_database():
                 ip_address VARCHAR(64)
             )
         ''')
+        # Additive migration for secondary administrator accounts. Existing quote data is untouched.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS admin_users (
+                id BIGSERIAL PRIMARY KEY,
+                username VARCHAR(120) NOT NULL,
+                password_hash TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS admin_users_username_lower_unique
+            ON admin_users (LOWER(username))
+        ''')
 
 
 def save_quote(data, ip_address):
@@ -162,11 +178,133 @@ def verify_admin_credentials(username, password):
     return password_valid and secrets.compare_digest(username, ADMIN_USERNAME)
 
 
+def validate_admin_username(username):
+    if not isinstance(username, str):
+        return None
+    username = username.strip()
+    if not ADMIN_USERNAME_RE.fullmatch(username):
+        return None
+    return username
+
+
+def password_hash_is_valid(password_hash):
+    return isinstance(password_hash, str) and password_hash.startswith('$argon2id$')
+
+
+def verify_password_hash(password_hash, password):
+    if _password_hasher is None or not password_hash_is_valid(password_hash) or not isinstance(password, str):
+        return False
+    try:
+        return _password_hasher.verify(password_hash, password)
+    except (InvalidHashError, VerificationError, TypeError, ValueError):
+        return False
+
+
+def authenticate_admin(username, password):
+    """Authenticate the legacy environment-backed primary or an active database admin."""
+    if not isinstance(username, str) or not isinstance(password, str) or len(username) > 120 or len(password) > 1024:
+        return None
+    if verify_admin_credentials(username, password):
+        return {'id': None, 'username': ADMIN_USERNAME, 'is_primary': True}
+    if ADMIN_USERNAME and username.casefold() == ADMIN_USERNAME.casefold():
+        return None
+    if not username or _password_hasher is None:
+        return None
+    user = get_admin_user_for_authentication(username)
+    if not user or not user[3] or not verify_password_hash(user[2], password):
+        return None
+    return {'id': user[0], 'username': user[1], 'is_primary': False, 'updated_at': user[4]}
+
+
+class DuplicateAdminUsername(Exception):
+    pass
+
+
+def _admin_db_unique_violation(error):
+    return getattr(error, 'sqlstate', None) == '23505'
+
+
+def get_admin_user_for_authentication(username):
+    with database_connection() as conn:
+        return conn.execute('''
+            SELECT id, username, password_hash, is_active, updated_at
+            FROM admin_users WHERE LOWER(username) = LOWER(%s) LIMIT 1
+        ''', (username,)).fetchone()
+
+
+def list_admin_users():
+    with database_connection() as conn:
+        rows = conn.execute('''
+            SELECT id, username, is_active, created_at
+            FROM admin_users ORDER BY LOWER(username), id
+        ''').fetchall()
+    return [
+        {'id': row[0], 'username': row[1], 'is_active': row[2],
+         'created_at': row[3].isoformat() if hasattr(row[3], 'isoformat') else row[3]}
+        for row in rows
+    ]
+
+
+def create_admin_user(username, password_hash):
+    try:
+        with database_connection() as conn:
+            row = conn.execute('''
+                INSERT INTO admin_users (username, password_hash)
+                VALUES (%s, %s)
+                RETURNING id, username, is_active, created_at
+            ''', (username, password_hash)).fetchone()
+    except Exception as error:
+        if _admin_db_unique_violation(error):
+            raise DuplicateAdminUsername from error
+        raise
+    return {'id': row[0], 'username': row[1], 'is_active': row[2],
+            'created_at': row[3].isoformat() if hasattr(row[3], 'isoformat') else row[3]}
+
+
+def update_admin_user(user_id, username=None, password_hash=None, is_active=None):
+    assignments = []
+    params = []
+    if username is not None:
+        assignments.append('username = %s')
+        params.append(username)
+    if password_hash is not None:
+        assignments.append('password_hash = %s')
+        params.append(password_hash)
+    if is_active is not None:
+        assignments.append('is_active = %s')
+        params.append(is_active)
+    if not assignments:
+        return None
+    assignments.append('updated_at = CURRENT_TIMESTAMP')
+    params.append(user_id)
+    try:
+        with database_connection() as conn:
+            row = conn.execute(f'''
+                UPDATE admin_users SET {', '.join(assignments)}
+                WHERE id = %s
+                RETURNING id, username, is_active, created_at
+            ''', tuple(params)).fetchone()
+    except Exception as error:
+        if _admin_db_unique_violation(error):
+            raise DuplicateAdminUsername from error
+        raise
+    return ({'id': row[0], 'username': row[1], 'is_active': row[2],
+             'created_at': row[3].isoformat() if hasattr(row[3], 'isoformat') else row[3]}
+            if row else None)
+
+
+def get_admin_user_session_state(user_id):
+    with database_connection() as conn:
+        return conn.execute('''
+            SELECT is_active, updated_at FROM admin_users WHERE id = %s LIMIT 1
+        ''', (user_id,)).fetchone()
+
+
 def _session_key(session_token):
     return sha256(session_token.encode('utf-8')).hexdigest()
 
 
-def create_admin_session(username):
+def create_admin_session(account):
     now = time.time()
     session_token = secrets.token_urlsafe(32)
     csrf_token = secrets.token_urlsafe(32)
@@ -175,11 +313,23 @@ def create_admin_session(username):
         for key in expired:
             _admin_sessions.pop(key, None)
         _admin_sessions[_session_key(session_token)] = {
-            'username': username,
+            'username': account['username'],
+            'account_id': account.get('id'),
+            'is_primary': bool(account.get('is_primary')),
+            'account_updated_at': account.get('updated_at'),
             'csrf_token': csrf_token,
             'expires_at': now + ADMIN_SESSION_SECONDS,
         }
     return session_token, csrf_token
+
+
+def revoke_admin_sessions(account_id):
+    if account_id is None:
+        return
+    with _admin_sessions_lock:
+        expired = [key for key, session in _admin_sessions.items() if session.get('account_id') == account_id]
+        for key in expired:
+            _admin_sessions.pop(key, None)
 
 
 def get_admin_session(handler):
@@ -201,7 +351,18 @@ def get_admin_session(handler):
             _admin_sessions.pop(key, None)
             return None
         session['expires_at'] = now + ADMIN_SESSION_SECONDS
-        return dict(session)
+        session = dict(session)
+    if session.get('account_id') is not None:
+        try:
+            account_state = get_admin_user_session_state(session['account_id'])
+        except Exception:
+            return None
+        if (not account_state or not account_state[0]
+                or account_state[1] != session.get('account_updated_at')):
+            with _admin_sessions_lock:
+                _admin_sessions.pop(key, None)
+            return None
+    return session
 
 
 def delete_admin_session(handler):
@@ -757,26 +918,30 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
                 return
             username = data.get('username')
             password = data.get('password')
-            if not admin_auth_configured():
-                self.send_json(503, {'success': False, 'message': 'Admin login is not configured on this server.'})
-                return
             if (not isinstance(username, str) or not isinstance(password, str)
                     or not username or len(username) > 120 or not password or len(password) > 1024):
                 self.send_json(401, {'success': False, 'message': 'Invalid username or password.'})
                 return
-            if not verify_admin_credentials(username, password):
+            try:
+                account = authenticate_admin(username, password)
+            except Exception as error:
+                logger.error('Admin authentication lookup failed exception_type=%s', type(error).__name__)
+                self.send_json(503, {'success': False, 'message': 'Admin sign in is temporarily unavailable.'})
+                return
+            if not account:
                 self.send_json(401, {'success': False, 'message': 'Invalid username or password.'})
                 return
 
             clear_admin_login_attempts(ip_address)
-            session_token, csrf_token = create_admin_session(ADMIN_USERNAME)
+            session_token, csrf_token = create_admin_session(account)
             cookie = (f'alipen_admin_session={session_token}; Path=/; HttpOnly; SameSite=Strict; '
                       f'Max-Age={ADMIN_SESSION_SECONDS}')
             if self.secure_cookie():
                 cookie += '; Secure'
             self.send_json(200, {
                 'success': True,
-                'username': ADMIN_USERNAME,
+                'username': account['username'],
+                'isPrimary': account['is_primary'],
                 'csrfToken': csrf_token,
             }, headers={'Set-Cookie': cookie})
             return
@@ -795,7 +960,99 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
         if method == 'GET' and path == '/api/admin/session':
-            self.send_json(200, {'authenticated': True, 'username': session['username'], 'csrfToken': session['csrf_token']})
+            self.send_json(200, {
+                'authenticated': True, 'username': session['username'],
+                'isPrimary': session.get('is_primary', False), 'csrfToken': session['csrf_token'],
+            })
+            return
+
+        if path == '/api/admin/users' or path.startswith('/api/admin/users/'):
+            if not session.get('is_primary'):
+                self.send_json(403, {'success': False, 'message': 'Primary administrator access required.'})
+                return
+            if method == 'GET' and path == '/api/admin/users':
+                try:
+                    self.send_json(200, {'users': list_admin_users()})
+                except Exception as error:
+                    logger.error('Admin user list unavailable exception_type=%s', type(error).__name__)
+                    self.send_json(503, {'success': False, 'message': 'Administrator accounts are temporarily unavailable.'})
+                return
+            if method == 'POST' and path == '/api/admin/users':
+                data = self.read_admin_json()
+                if data is None:
+                    return
+                username = validate_admin_username(data.get('username'))
+                password = data.get('password')
+                if not username:
+                    self.send_json(422, {'success': False, 'message': 'Username must be 3–120 characters and use letters, numbers, dots, underscores, or hyphens.'})
+                    return
+                if ADMIN_USERNAME and username.casefold() == ADMIN_USERNAME.casefold():
+                    self.send_json(409, {'success': False, 'message': 'That username is reserved for the primary administrator.'})
+                    return
+                if not isinstance(password, str) or len(password) < 12 or len(password) > 1024:
+                    self.send_json(422, {'success': False, 'message': 'Password must be at least 12 characters.'})
+                    return
+                try:
+                    created = create_admin_user(username, _password_hasher.hash(password))
+                except DuplicateAdminUsername:
+                    self.send_json(409, {'success': False, 'message': 'That username is already in use.'})
+                    return
+                except Exception as error:
+                    logger.error('Admin user creation failed exception_type=%s', type(error).__name__)
+                    self.send_json(503, {'success': False, 'message': 'Administrator account could not be created.'})
+                    return
+                self.send_json(201, {'success': True, 'user': created})
+                return
+            if method == 'PATCH' and path.startswith('/api/admin/users/'):
+                user_id_text = path[len('/api/admin/users/'):]
+                if not user_id_text.isdecimal() or len(user_id_text) > 18:
+                    self.send_json(404, {'success': False, 'message': 'Administrator account not found.'})
+                    return
+                data = self.read_admin_json()
+                if data is None:
+                    return
+                username = None
+                password_hash = None
+                is_active = None
+                if 'username' in data:
+                    username = validate_admin_username(data['username'])
+                    if not username:
+                        self.send_json(422, {'success': False, 'message': 'Username must be 3–120 characters and use letters, numbers, dots, underscores, or hyphens.'})
+                        return
+                    if ADMIN_USERNAME and username.casefold() == ADMIN_USERNAME.casefold():
+                        self.send_json(409, {'success': False, 'message': 'That username is reserved for the primary administrator.'})
+                        return
+                if 'password' in data:
+                    password = data['password']
+                    if not isinstance(password, str) or len(password) < 12 or len(password) > 1024:
+                        self.send_json(422, {'success': False, 'message': 'Password must be at least 12 characters.'})
+                        return
+                    password_hash = _password_hasher.hash(password)
+                if 'is_active' in data:
+                    if not isinstance(data['is_active'], bool):
+                        self.send_json(422, {'success': False, 'message': 'Account active state must be true or false.'})
+                        return
+                    is_active = data['is_active']
+                if username is None and password_hash is None and is_active is None:
+                    self.send_json(422, {'success': False, 'message': 'Provide a username, password, or active-state change.'})
+                    return
+                user_id = int(user_id_text)
+                try:
+                    updated = update_admin_user(user_id, username, password_hash, is_active)
+                except DuplicateAdminUsername:
+                    self.send_json(409, {'success': False, 'message': 'That username is already in use.'})
+                    return
+                except Exception as error:
+                    logger.error('Admin user update failed exception_type=%s', type(error).__name__)
+                    self.send_json(503, {'success': False, 'message': 'Administrator account could not be updated.'})
+                    return
+                if not updated:
+                    self.send_json(404, {'success': False, 'message': 'Administrator account not found.'})
+                    return
+                revoke_admin_sessions(user_id)
+                self.send_json(200, {'success': True, 'user': updated})
+                return
+            self.send_json(404, {'success': False, 'message': 'Admin endpoint not found.'})
             return
 
         if method == 'GET' and path == '/api/admin/overview':

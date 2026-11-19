@@ -1,6 +1,6 @@
 (() => {
   const API = '/api/admin';
-  const state = { csrfToken: '', page: 1, pageSize: 20, total: 0, search: '', status: 'all', currentReference: '' };
+  const state = { csrfToken: '', page: 1, pageSize: 20, total: 0, search: '', status: 'all', currentReference: '', isPrimary: false };
   const byId = (id) => document.getElementById(id);
 
   function makeElement(tag, className, text) {
@@ -135,17 +135,58 @@
     byId('nextPage').disabled = last >= state.total;
   }
 
+  async function loadAdminUsers() {
+    if (!state.isPrimary) throw new Error('Primary administrator access required.');
+    const data = await api('/users');
+    const tbody = byId('adminUsersRows');
+    const users = data.users || [];
+    tbody.replaceChildren();
+    byId('adminUsersEmpty').hidden = users.length > 0;
+    users.forEach((user) => {
+      const row = document.createElement('tr');
+      const nameCell = makeElement('td', 'customer-cell');
+      nameCell.append(makeElement('strong', '', user.username));
+      row.append(nameCell);
+      const date = user.created_at ? formatDate(user.created_at) : '—';
+      const dateCell = makeElement('td', '', date);
+      row.append(dateCell);
+      const statusCell = document.createElement('td');
+      statusCell.append(makeElement('span', `status-pill ${user.is_active ? 'completed' : 'other'}`, user.is_active ? 'Active' : 'Deactivated'));
+      row.append(statusCell);
+      const actionCell = document.createElement('td');
+      const edit = makeElement('button', 'text-button', 'Manage');
+      edit.type = 'button';
+      edit.addEventListener('click', () => openAdminUserEditor(user));
+      actionCell.append(edit);
+      row.append(actionCell);
+      tbody.append(row);
+    });
+  }
+
+  function openAdminUserEditor(user) {
+    if (!state.isPrimary) return;
+    const form = byId('editAdminUserForm');
+    form.elements.namedItem('id').value = user.id;
+    form.elements.namedItem('username').value = user.username;
+    form.elements.namedItem('password').value = '';
+    form.elements.namedItem('is_active').checked = Boolean(user.is_active);
+    byId('adminUserDialog').showModal();
+  }
+
   function showView(name) {
+    if (name === 'users' && !state.isPrimary) return;
     const overview = name === 'overview';
-    byId('overviewView').hidden = !overview;
-    byId('quotesView').hidden = overview;
+    byId('overviewView').hidden = name !== 'overview';
+    byId('quotesView').hidden = name !== 'quotes';
+    byId('usersView').hidden = name !== 'users';
     document.querySelectorAll('[data-admin-view]').forEach((button) => {
       button.classList.toggle('active', button.dataset.adminView === name);
     });
     byId('adminSidebar').classList.remove('open');
     byId('sidebarToggle').setAttribute('aria-expanded', 'false');
     if (overview) loadOverview().catch((error) => showNotice(error.message, true));
-    else loadQuotes().catch((error) => showNotice(error.message, true));
+    else if (name === 'quotes') loadQuotes().catch((error) => showNotice(error.message, true));
+    else loadAdminUsers().catch((error) => showNotice(error.message, true));
   }
 
   async function openQuote(reference) {
@@ -216,6 +257,8 @@
     try {
       const session = await api('/session');
       state.csrfToken = session.csrfToken;
+      state.isPrimary = Boolean(session.isPrimary);
+      byId('adminUsersNav').hidden = !state.isPrimary;
       byId('adminUsernameLabel').textContent = session.username;
       await loadOverview();
     } catch (error) {
@@ -256,6 +299,58 @@
     byId('quoteDetailDialog').addEventListener('click', (event) => {
       if (event.target === byId('quoteDetailDialog')) byId('quoteDetailDialog').close();
     });
+    if (state.isPrimary) {
+      byId('createAdminUserForm').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const button = byId('createAdminUserButton');
+        const formData = new FormData(form);
+        button.disabled = true;
+        try {
+          await api('/users', {
+            method: 'POST',
+            body: JSON.stringify({ username: formData.get('username'), password: formData.get('password') })
+          });
+          form.reset();
+          showNotice('Administrator account created.');
+          await loadAdminUsers();
+        } catch (error) {
+          showNotice(error.message, true);
+        } finally {
+          button.disabled = false;
+        }
+      });
+      byId('closeAdminUserDialog').addEventListener('click', () => byId('adminUserDialog').close());
+      byId('cancelAdminUserEdit').addEventListener('click', () => byId('adminUserDialog').close());
+      byId('editAdminUserForm').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const formData = new FormData(form);
+        const activeCheckbox = form.elements.namedItem('is_active');
+        const button = byId('saveAdminUserButton');
+        const update = {
+          username: formData.get('username'),
+          is_active: activeCheckbox.checked,
+        };
+        const newPassword = formData.get('password');
+        if (newPassword) update.password = newPassword;
+        button.disabled = true;
+        try {
+          await api(`/users/${encodeURIComponent(formData.get('id'))}`, {
+            method: 'PATCH',
+            body: JSON.stringify(update)
+          });
+          byId('adminUserDialog').close();
+          form.reset();
+          showNotice('Administrator account updated. Any existing sessions for that account were signed out.');
+          await loadAdminUsers();
+        } catch (error) {
+          showNotice(error.message, true);
+        } finally {
+          button.disabled = false;
+        }
+      });
+    }
     byId('statusForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       const button = byId('saveStatus');
