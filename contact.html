@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base href="/" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Request an official quotation for medical equipment and consumables in Kenya. Contact Peter Ogettoh at Alipen Solutions Agency Ltd: +254 712 272 463." />
+  <title>Request a Quote & Contact | Alipen Solutions Agency Ltd | Nairobi, Kenya</title>
+  
+  <link rel="icon" type="image/png" href="public/images/favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- Top Announcement Bar -->
+  <div class="announcement-bar">
+    <div class="container announcement-wrap">
+      <div class="announcement-left">
+        <span class="announcement-item">
+          📍 Nairobi, Kenya • Supplying Hospitals & Clinics Across All 47 Counties
+        </span>
+      </div>
+      <div class="announcement-right">
+        <span class="announcement-item">
+          📞 Call / WhatsApp: <a href="tel:+254712272463" style="color:#fff; font-weight:700;">+254 712 272 463</a> (Peter Ogettoh)
+        </span>
+        <span class="announcement-item">
+          ✉️ <a href="mailto:info@alipen.co.ke" style="color:#fff;">info@alipen.co.ke</a>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Site Header -->
+  <header class="site-header">
+    <div class="container nav-wrap">
+      <a href="index.html" class="brand" aria-label="Alipen Solutions Agency Ltd">
+        <img src="public/images/logo.png" alt="Alipen Solutions Agency Ltd Logo" class="brand-logo-img" />
+      </a>
+
+      <nav class="main-nav" aria-label="Main Navigation">
+        <a href="index.html" class="nav-link">Home</a>
+        <a href="products.html" class="nav-link">Products Catalog</a>
+        <a href="about.html" class="nav-link">About Us</a>
+        <a href="contact.html" class="nav-link active">Contact & Quotations</a>
+      </nav>
+
+      <div class="header-actions">
+        <a href="contact.html" class="quote-nav-btn" aria-label="Quote Basket">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
+          <span>Quote Basket</span>
+          <span class="quote-badge-count" style="display:none;">0</span>
+        </a>
+        <a href="contact.html" class="btn btn-primary btn-sm">Request Quote</a>
+        <button class="mobile-nav-toggle" aria-label="Open Mobile Menu">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Mobile Drawer Backdrop -->
+  <div class="drawer-backdrop"></div>
+
+  <!-- Mobile Drawer -->
+  <div class="mobile-drawer">
+    <div class="drawer-header">
+      <img src="public/images/logo.png" alt="Alipen Solutions Agency Ltd" style="height:40px; width:auto;" />
+      <button class="drawer-close" aria-label="Close Mobile Menu">&times;</button>
+    </div>
+    <div class="drawer-nav">
+      <a href="index.html">Home</a>
+      <a href="products.html">Products Catalog</a>
+      <a href="about.html">About Us</a>
+      <a href="contact.html" class="active">Request a Quote</a>
+    </div>
+    <div class="drawer-footer">
+      <p style="font-size:0.85rem; color:#64748B; margin-bottom:0.75rem;">
+        <strong>Peter Ogettoh</strong><br />
+        <a href="tel:+254712272463" style="color:#1652A0; font-weight:700;">+254 712 272 463</a><br />
+        Nairobi, Kenya
+      </p>
+      <a href="https://wa.me/254712272463" class="btn btn-whatsapp btn-sm" style="width:100%;">WhatsApp Direct</a>
+    </div>
+  </div>
+
+  <!-- Page Header -->
+  <section style="background:linear-gradient(135deg, #F8FAFC 0%, #EFF6FF 100%); padding:3.5rem 0 2.5rem 0; border-bottom:1px solid #E2E8F0;">
+    <div class="container">
+      <span class="section-label">Direct Procurement & Inquiries</span>
+      <h1 class="section-title" style="font-size:clamp(2rem, 3.5vw, 2.75rem);">Request an Institutional Medical Quote</h1>
+      <p class="section-subtitle">
+        Select equipment and consumable quantities below to generate a tailored quotation or forward your order directly to Peter Ogettoh via WhatsApp or Email.
+      </p>
+    </div>
+  </section>
+
+  <!-- Main Quote & Contact Section -->
+  <section class="section">
+    <div class="container">
+      <div class="contact-layout-grid">
+        
+        <!-- Left: Interactive Multi-Item Quote Builder & Form -->
+        <div class="contact-quote-column">
+          
+          <!-- Selected Items Basket Panel -->
+          <div class="quote-basket-card">
+            <div class="quote-basket-header">
+              <div>
+                <h3 style="font-size:1.25rem; font-weight:800; color:#1E293B;">Your Quote Items Basket</h3>
+                <p style="font-size:0.85rem; color:#64748B;">Items added from the catalog will be included in your official quotation request.</p>
+              </div>
+              <button type="button" id="clearBasketBtn" style="font-size:0.85rem; color:#DC2626; font-weight:600; cursor:pointer;">
+                Clear All
+              </button>
+            </div>
+
+            <!-- Items List Container -->
+            <div id="basketItemsList">
+              <!-- Injected dynamically via JS -->
+            </div>
+
+            <!-- Quick Add Item Dropdown -->
+            <div style="margin-top:1.5rem; padding-top:1.25rem; border-top:1px dashed #CBD5E1; display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
+              <span style="font-size:0.875rem; font-weight:700; color:#1E293B;">+ Add more items:</span>
+              <select id="quickAddSelect" class="form-select" style="max-width:320px; font-size:0.85rem;">
+                <option value="">-- Choose item to add to quote --</option>
+                <!-- Populated via JS -->
+              </select>
+              <button type="button" id="quickAddBtn" class="btn btn-outline btn-sm">Add Item</button>
+            </div>
+          </div>
+
+          <!-- Facility & Contact Form -->
+          <div class="form-card">
+            <h3 style="font-size:1.35rem; font-weight:800; color:#1E293B; margin-bottom:0.5rem;">
+              Hospital / Clinic Facility Information
+            </h3>
+            <p style="font-size:0.9rem; color:#64748B; margin-bottom:2rem;">
+              Fill out your details so we can address your proforma invoice and verify delivery logistics.
+            </p>
+
+            <form id="quoteRequestForm">
+              <input type="text" name="website" id="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;height:1px;width:1px;" />
+
+              <div class="form-grid-2">
+                <div class="form-group">
+                  <label for="contactName" class="form-label">Full Name / Procurement Officer *</label>
+                  <input type="text" id="contactName" name="name" class="form-input" placeholder="e.g. Dr. Jane Kamau / Mr. John Omondi" required />
+                </div>
+                <div class="form-group">
+                  <label for="facilityName" class="form-label">Facility / Hospital Name *</label>
+                  <input type="text" id="facilityName" name="facility" class="form-input" placeholder="e.g. Nairobi Health Hospital / St. Mary Clinic" required />
+                </div>
+              </div>
+
+              <div class="form-grid-2">
+                <div class="form-group">
+                  <label for="facilityType" class="form-label">Facility Type</label>
+                  <select id="facilityType" name="facilityType" class="form-select">
+                    <option value="Private Hospital">Private Hospital</option>
+                    <option value="County / Referral Hospital">County / Referral Hospital</option>
+                    <option value="Specialist Clinic">Specialist Outpatient Clinic</option>
+                    <option value="Radiology / Imaging Center">Radiology / Imaging Center</option>
+                    <option value="Diagnostic Laboratory">Diagnostic Laboratory</option>
+                    <option value="Faith-Based / Mission Facility">Faith-Based / Mission Facility</option>
+                    <option value="Other">Other Medical Entity</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="locationCounty" class="form-label">City / County Location *</label>
+                  <input type="text" id="locationCounty" name="county" class="form-input" placeholder="e.g. Nairobi, Kiambu, Mombasa, Kisumu..." required />
+                </div>
+              </div>
+
+              <div class="form-grid-2">
+                <div class="form-group">
+                  <label for="phone" class="form-label">Phone / WhatsApp Number *</label>
+                  <input type="tel" id="phone" name="phone" class="form-input" placeholder="e.g. +254 7..." required />
+                </div>
+                <div class="form-group">
+                  <label for="email" class="form-label">Official Email Address *</label>
+                  <input type="email" id="email" name="email" class="form-input" placeholder="procurement@facility.co.ke" required />
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="requirements" class="form-label">Additional Requirements / Delivery Timelines</label>
+                <textarea id="requirements" name="requirements" class="form-textarea" rows="4" placeholder="Mention preferred sizes (e.g. for X-Ray film 14x17), urgent delivery requests, or tender specifications."></textarea>
+              </div>
+
+              <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-top:2rem;">
+                <button type="button" id="submitWhatsAppQuoteBtn" class="btn btn-whatsapp btn-lg" style="flex:1;">
+                  <span>Forward Quote via WhatsApp</span>
+                </button>
+                <button type="submit" id="submitFormalQuoteBtn" class="btn btn-primary btn-lg" style="flex:1;">
+                  <span>Submit Formal Request</span>
+                </button>
+              </div>
+
+            </form>
+          </div>
+
+        </div>
+
+        <!-- Right: Official Contact Details & FAQs -->
+        <div class="contact-details-column">
+          
+          <!-- Contact Card -->
+          <div class="contact-sidebar-card">
+            <h3>Direct Contact Office</h3>
+            <p style="font-size:0.9rem; color:#CBD5E1; line-height:1.6; margin-bottom:2rem;">
+              Reach Peter Ogettoh directly for immediate stock inquiries, contract supply, or emergency hospital deliveries.
+            </p>
+
+            <div class="contact-info-list">
+              
+              <div class="contact-info-item">
+                <div class="contact-info-icon">👤</div>
+                <div class="contact-info-text">
+                  <label>Contact Person & Leadership</label>
+                  <span>Peter Ogettoh</span>
+                </div>
+              </div>
+
+              <div class="contact-info-item">
+                <div class="contact-info-icon">📞</div>
+                <div class="contact-info-text">
+                  <label>Direct Phone / Call</label>
+                  <a href="tel:+254712272463">+254 712 272 463</a>
+                </div>
+              </div>
+
+              <div class="contact-info-item">
+                <div class="contact-info-icon">💬</div>
+                <div class="contact-info-text">
+                  <label>WhatsApp Instant Line</label>
+                  <a href="https://wa.me/254712272463" target="_blank" rel="noopener noreferrer">+254 712 272 463</a>
+                </div>
+              </div>
+
+              <div class="contact-info-item">
+                <div class="contact-info-icon">✉️</div>
+                <div class="contact-info-text">
+                  <label>Email Address</label>
+                  <a href="mailto:info@alipen.co.ke">info@alipen.co.ke</a>
+                </div>
+              </div>
+
+              <div class="contact-info-item">
+                <div class="contact-info-icon">📍</div>
+                <div class="contact-info-text">
+                  <label>Physical & Operations Hub</label>
+                  <span>Nairobi, Kenya</span>
+                </div>
+              </div>
+
+              <div class="contact-info-item">
+                <div class="contact-info-icon">🕒</div>
+                <div class="contact-info-text">
+                  <label>Business & Dispatch Hours</label>
+                  <span>Mon – Sat: 8:00 AM – 6:00 PM<br /><small style="color:#93C5FD;">Emergency dispatch available on request</small></span>
+                </div>
+              </div>
+
+            </div>
+
+            <div style="border-top:1px solid rgba(255,255,255,0.15); padding-top:1.5rem; text-align:center;">
+              <a href="tel:+254712272463" class="btn btn-outline-white" style="width:100%; margin-bottom:0.75rem;">
+                Call Peter Directly
+              </a>
+              <a href="https://wa.me/254712272463?text=Hello%20Peter,%20I%20am%20calling%20from%20a%20healthcare%20facility." class="btn btn-whatsapp" style="width:100%;">
+                Chat on WhatsApp
+              </a>
+            </div>
+          </div>
+
+          <!-- Hub Image Card -->
+          <div style="background:#fff; border-radius:16px; overflow:hidden; border:1px solid #E2E8F0; margin-top:1.5rem; box-shadow:var(--shadow-sm);">
+            <img src="public/images/supply-chain-warehouse.jpg" alt="Alipen Logistics Hub Nairobi" style="width:100%; height:160px; object-fit:cover;" />
+            <div style="padding:1rem 1.25rem;">
+              <span class="badge badge-green" style="font-size:0.7rem; margin-bottom:0.25rem;">Nairobi Operations Hub</span>
+              <p style="font-size:0.85rem; color:#475569; margin:0; line-height:1.4;">
+                Central distribution warehouse in Nairobi with dedicated emergency dispatch across all 47 counties in Kenya.
+              </p>
+            </div>
+          </div>
+
+          <!-- Quick FAQs Box -->
+          <div style="background:#fff; border-radius:16px; border:1px solid #E2E8F0; padding:2rem; margin-top:2rem; box-shadow:var(--shadow-sm);">
+            <h4 style="font-size:1.15rem; font-weight:800; color:#1E293B; margin-bottom:1.25rem;">
+              Procurement & Delivery FAQs
+            </h4>
+
+            <div style="display:flex; flex-direction:column; gap:1.25rem; font-size:0.9rem;">
+              <div>
+                <strong style="color:#1652A0; display:block; margin-bottom:0.25rem;">How fast is hospital delivery in Kenya?</strong>
+                <p style="color:#64748B; line-height:1.5;">
+                  Facilities within Nairobi and surrounding counties receive same-day or next-morning dispatch. Regional deliveries to Mombasa, Kisumu, Nakuru, and Eldoret arrive within 24 to 48 hours.
+                </p>
+              </div>
+
+              <div>
+                <strong style="color:#1652A0; display:block; margin-bottom:0.25rem;">Do you issue official tax and proforma invoices?</strong>
+                <p style="color:#64748B; line-height:1.5;">
+                  Yes, Alipen Solutions Agency Ltd is a registered corporate entity in Kenya. We issue compliant ETR proforma invoices and delivery notes.
+                </p>
+              </div>
+
+              <div>
+                <strong style="color:#1652A0; display:block; margin-bottom:0.25rem;">Are bulk institutional discounts available?</strong>
+                <p style="color:#64748B; line-height:1.5;">
+                  Yes, we offer volume pricing tiers for hospitals ordering case quantities of ultrasound gel, cartons of dry X-ray films, or multiple patient monitors.
+                </p>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Submission Confirmation Modal -->
+  <div id="confirmModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:999; backdrop-filter:blur(4px); align-items:center; justify-content:center; padding:1.5rem;">
+    <div style="background:#fff; border-radius:16px; max-width:540px; width:100%; padding:2.5rem; box-shadow:var(--shadow-xl); text-align:center;">
+      <div style="width:64px; height:64px; background:#DCFCE7; color:#16A34A; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:2rem; font-weight:800; margin:0 auto 1.5rem auto;">
+        ✓
+      </div>
+      <h3 style="font-size:1.6rem; font-weight:800; color:#1E293B; margin-bottom:0.5rem;">Quote Request Received!</h3>
+      <p id="confirmationMessage" style="color:#64748B; font-size:0.95rem; line-height:1.6; margin-bottom:1.5rem;">
+        Your request confirmation and reference will appear here after submission.
+      </p>
+      <div id="modalSummaryBox" style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:1rem; text-align:left; white-space:pre-line; font-size:0.875rem; color:#334155; margin-bottom:2rem;">
+        <!-- Injected via JS -->
+      </div>
+      <div style="display:flex; gap:1rem; justify-content:center;">
+        <button type="button" id="closeModalBtn" class="btn btn-primary" style="flex:1;">Done</button>
+        <a href="#" id="modalWhatsAppBtn" class="btn btn-whatsapp" style="flex:1;" target="_blank">Forward via WhatsApp</a>
+      </div>
+    </div>
+  </div>
+
+    <!-- Site Footer -->
+  <footer class="site-footer">
+    <div class="container footer-top">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <img src="public/images/logo.png" alt="Alipen Solutions Agency Ltd" style="height:38px; width:auto; background:#fff; padding:4px 10px; border-radius:6px; margin-bottom:0.5rem;" />
+          <p>
+            <strong>Alipen Solutions Agency Ltd</strong> (<em>--Empowering Health Solutions--</em>)<br />
+            Certified diagnostic monitoring equipment, radiology dry films, ultrasound gels, and hospital furniture supplying facilities across Nairobi and all 47 Kenyan counties.
+          </p>
+          <div style="font-size:0.8rem; color:#94A3B8;">
+            📍 Nairobi, Kenya • Verified Healthcare Partner
+          </div>
+        </div>
+
+        <div class="footer-col">
+          <h4>Core Product Sectors</h4>
+          <div class="footer-links">
+            <a href="products.html?category=critical">Diagnostic & Patient Monitoring</a>
+            <a href="products.html?category=imaging">Medical Imaging & Dry Films</a>
+            <a href="products.html?category=surgical">Ultrasound Gel & Steri Gauze</a>
+            <a href="products.html?category=furniture">Emergency Trolleys & Furniture</a>
+            <a href="products.html">All 33 Catalog Products</a>
+          </div>
+        </div>
+
+        <div class="footer-col">
+          <h4>Quick Navigation</h4>
+          <div class="footer-links">
+            <a href="index.html">Home</a>
+            <a href="products.html">Product Catalog</a>
+            <a href="about.html">About Us & Standards</a>
+            <a href="contact.html">Request a Quote</a>
+            <a href="https://wa.me/254712272463">WhatsApp (+254 712 272 463)</a>
+          </div>
+        </div>
+
+        <div class="footer-col">
+          <h4>Direct Contact</h4>
+          <div class="footer-contact-list">
+            <div><span style="color:#60A5FA; font-weight:700;">Contact:</span> Peter Ogettoh</div>
+            <div><span style="color:#60A5FA; font-weight:700;">Phone / WA:</span> <a href="tel:+254712272463" style="color:#fff; font-weight:600;">+254 712 272 463</a></div>
+            <div><span style="color:#60A5FA; font-weight:700;">Email:</span> <a href="mailto:info@alipen.co.ke" style="color:#CBD5E1;">info@alipen.co.ke</a></div>
+            <div><span style="color:#60A5FA; font-weight:700;">Location:</span> Nairobi, Kenya</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="container footer-bottom">
+      <div>
+        © 2026 Alipen Solutions Agency Ltd. All rights reserved. --Empowering Health Solutions--
+      </div>
+      <div>
+        Peter Ogettoh • +254 712 272 463 • Nairobi, Kenya
+      </div>
+    </div>
+  </footer>
+
+  <!-- Floating WhatsApp Action -->
+  <a href="https://wa.me/254712272463" class="floating-whatsapp-widget" target="_blank" rel="noopener noreferrer" aria-label="Chat on WhatsApp with Peter Ogettoh">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12.031 6.172c-3.181 0-5.767 2.586-5.768 5.766-.001 1.298.38 2.27 1.019 3.287l-.711 2.598 2.664-.698c.969.585 1.961.916 2.796.916 3.183 0 5.768-2.587 5.768-5.769 0-3.181-2.585-5.766-5.768-5.766zm9.969 5.767c0 5.485-4.484 9.969-9.969 9.969-1.688 0-3.272-.424-4.664-1.168l-5.367 1.407 1.431-5.234c-.84-1.449-1.331-3.125-1.331-4.974 0-5.485 4.484-9.969 9.969-9.969 5.485 0 9.969 4.484 9.969 9.969z"></path></svg>
+    <span>WhatsApp Peter Ogettoh</span>
+  </a>
+
+  <!-- Scripts -->
+  <script src="products.js" defer></script>
+  <script src="app.js" defer></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // Check for prefill query param
+      const urlParams = new URLSearchParams(window.location.search);
+      const prefillSlug = urlParams.get('prefill');
+      if (prefillSlug) {
+        const product = getProductBySlug(prefillSlug);
+        if (product) {
+          const basket = QuoteBasket.get();
+          if (!basket.some(i => i.slug === prefillSlug)) {
+            QuoteBasket.add(prefillSlug, 1);
+          }
+        }
+      }
+
+      const basketList = document.getElementById('basketItemsList');
+      const quickSelect = document.getElementById('quickAddSelect');
+      const quickAddBtn = document.getElementById('quickAddBtn');
+      const clearBtn = document.getElementById('clearBasketBtn');
+      const form = document.getElementById('quoteRequestForm');
+      const submitWhatsAppBtn = document.getElementById('submitWhatsAppQuoteBtn');
+
+      // Populate Quick Add dropdown with all catalogue products
+      if (quickSelect && typeof getAllProducts === 'function') {
+        const all = getAllProducts();
+        quickSelect.innerHTML = '<option value="">-- Choose item to add to quote --</option>' +
+          all.map(p => `<option value="${p.slug}">${p.name}</option>`).join('');
+      }
+
+      if (quickAddBtn) {
+        quickAddBtn.addEventListener('click', () => {
+          const slug = quickSelect.value;
+          if (slug) {
+            QuoteBasket.add(slug, 1);
+            quickSelect.value = '';
+            renderBasket();
+          }
+        });
+      }
+
+      function renderBasket() {
+        const items = QuoteBasket.get();
+        if (items.length === 0) {
+          basketList.innerHTML = `
+            <div style="text-align:center; padding:2rem; background:#F8FAFC; border-radius:8px; border:1px dashed #CBD5E1;">
+              <span style="font-size:2rem; display:block; margin-bottom:0.5rem;">📋</span>
+              <p style="color:#64748B; font-size:0.95rem; margin-bottom:1rem;">Your quote basket is currently empty.</p>
+              <a href="products.html" class="btn btn-outline btn-sm">Explore Products Catalog</a>
+            </div>
+          `;
+          return;
+        }
+
+        basketList.innerHTML = items.map(item => `
+          <div class="quote-item-row" data-item-slug="${item.slug}">
+            <div class="quote-item-info">
+              <img src="${item.image}" alt="${item.name}" class="quote-item-thumb" />
+              <div>
+                <h4 class="quote-item-title">${item.shortName || item.name}</h4>
+                <span class="quote-item-cat">${item.category || 'Medical Equipment'}</span>
+              </div>
+            </div>
+            <div class="quote-item-actions">
+              <div class="qty-selector">
+                <button type="button" class="qty-btn" onclick="handleItemQty('${item.slug}', -1)">-</button>
+                <span class="qty-input" style="display:flex; align-items:center; justify-content:center;">${item.quantity || 1}</span>
+                <button type="button" class="qty-btn" onclick="handleItemQty('${item.slug}', 1)">+</button>
+              </div>
+              <button type="button" class="quote-remove-btn" onclick="handleItemRemove('${item.slug}')" title="Remove item">
+                Remove
+              </button>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      window.handleItemQty = function(slug, delta) {
+        const items = QuoteBasket.get();
+        const item = items.find(i => i.slug === slug);
+        if (item) {
+          const newQty = (item.quantity || 1) + delta;
+          QuoteBasket.updateQuantity(slug, newQty);
+          renderBasket();
+        }
+      };
+
+      window.handleItemRemove = function(slug) {
+        QuoteBasket.remove(slug);
+        renderBasket();
+      };
+
+      if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+          if (confirm('Clear all items from your quote basket?')) {
+            QuoteBasket.clear();
+            renderBasket();
+          }
+        });
+      }
+
+      // Sync on custom event
+      window.addEventListener('quoteBasketUpdated', renderBasket);
+
+      // WhatsApp Quote Builder
+      if (submitWhatsAppBtn) {
+        submitWhatsAppBtn.addEventListener('click', () => {
+          const name = document.getElementById('contactName').value.trim();
+          const facility = document.getElementById('facilityName').value.trim();
+          const phone = document.getElementById('phone').value.trim();
+          const email = document.getElementById('email').value.trim();
+          const notes = document.getElementById('requirements').value.trim();
+
+          const url = buildWhatsAppQuoteUrl({ name, facility, phone, email, notes });
+          window.open(url, '_blank');
+        });
+      }
+
+      // Formal Form Submit with Confirmation Modal
+      if (form) {
+        form.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const submitButton = document.getElementById('submitFormalQuoteBtn');
+          const name = document.getElementById('contactName').value.trim();
+          const facility = document.getElementById('facilityName').value.trim();
+          const facilityType = document.getElementById('facilityType').value;
+          const county = document.getElementById('locationCounty').value.trim();
+          const phone = document.getElementById('phone').value.trim();
+          const email = document.getElementById('email').value.trim();
+          const notes = document.getElementById('requirements').value.trim();
+          const honeypot = document.getElementById('website').value;
+          const items = QuoteBasket.get();
+
+          if (!name || !facility || !county || !phone || !email) {
+            alert('Please complete all required fields before submitting your quote.');
+            return;
+          }
+
+          if (submitButton) {
+            submitButton.disabled = true;
+            submitButton.innerHTML = '<span>Sending request…</span>';
+          }
+
+          try {
+            const response = await fetch('/api/quotes', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name, facility, facilityType, county, phone, email,
+                requirements: notes, items, website: honeypot
+              })
+            });
+
+            let result;
+            try {
+              result = await response.json();
+            } catch (_) {
+              throw new Error('The server returned an unreadable response. Please try again or contact Peter by phone or WhatsApp.');
+            }
+            if (!response.ok || !result.success) {
+              throw new Error(result.message || 'Your quote request could not be submitted.');
+            }
+            if (!/^ALIPEN-[A-F0-9]{6}$/.test(result.reference || '')) {
+              throw new Error('The request was received, but we could not read its reference. Please contact Peter before submitting again.');
+            }
+
+            const summaryLines = [`Facility: ${facility} (${name})`, `Contact: ${phone} | ${email}`, 'Items Requested:'];
+            if (items.length > 0) {
+              summaryLines.push(...items.map(i => `- ${i.name} (Qty: ${i.quantity || 1})`));
+            } else {
+              summaryLines.push('- General Catalog & Procurement Inquiry');
+            }
+
+            document.getElementById('modalSummaryBox').textContent = summaryLines.join('\n');
+            const emailStates = Object.values(result.emailDelivery || {});
+            const allEmailsAccepted = emailStates.length === 2 && emailStates.every(state => state === 'accepted');
+            const someEmailsAccepted = emailStates.some(state => state === 'accepted');
+            const deliveryMessage = allEmailsAccepted
+              ? 'Resend accepted both email notifications for delivery.'
+              : someEmailsAccepted
+                ? 'Your request is saved. Resend accepted one notification, but the other could not be sent; please keep the reference above.'
+                : 'Your request is saved, but Resend could not accept the email notifications. Please keep the reference above.';
+            document.getElementById('confirmationMessage').textContent = `Thank you. Your quotation request has been received. Reference code: ${result.reference}. Peter Ogettoh and our procurement team will review your specifications. ${deliveryMessage}`;
+
+            const waUrl = buildWhatsAppQuoteUrl({ name, facility, phone, email, notes, items });
+            document.getElementById('modalWhatsAppBtn').href = waUrl;
+            document.getElementById('confirmModal').style.display = 'flex';
+          } catch (error) {
+            alert(error.message || 'We could not submit your request. Please use WhatsApp or call Peter directly.');
+          } finally {
+            if (submitButton) {
+              submitButton.disabled = false;
+              submitButton.innerHTML = '<span>Submit Formal Request</span>';
+            }
+          }
+        });
+      }
+
+      document.getElementById('closeModalBtn').addEventListener('click', () => {
+        document.getElementById('confirmModal').style.display = 'none';
+        QuoteBasket.clear();
+        renderBasket();
+        if (form) form.reset();
+      });
+
+      // Initial basket render
+      renderBasket();
+    });
+  </script>
+</body>
+</html>

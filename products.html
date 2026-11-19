@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base href="/" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Explore Alipen Solutions Agency Ltd's medical equipment catalog: Patient Monitors, QUIP Oxygen Concentrators, DRY X-Ray Films, Ultrasound Gel, and Hospital Furniture in Kenya." />
+  <title>Medical Equipment & Consumables Catalog | Alipen Solutions Agency Ltd</title>
+  
+  <link rel="icon" type="image/png" href="public/images/favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="catalogue-page">
+
+  <!-- Top Announcement Bar -->
+  <div class="announcement-bar">
+    <div class="container announcement-wrap">
+      <div class="announcement-left">
+        <span class="announcement-item">
+          📍 Nairobi, Kenya • Supplying Hospitals & Clinics Across All 47 Counties
+        </span>
+      </div>
+      <div class="announcement-right">
+        <span class="announcement-item">
+          📞 Call / WhatsApp: <a href="tel:+254712272463" style="color:#fff; font-weight:700;">+254 712 272 463</a> (Peter Ogettoh)
+        </span>
+        <span class="announcement-item">
+          ✉️ <a href="mailto:info@alipen.co.ke" style="color:#fff;">info@alipen.co.ke</a>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Site Header -->
+  <header class="site-header">
+    <div class="container nav-wrap">
+      <a href="index.html" class="brand" aria-label="Alipen Solutions Agency Ltd">
+        <img src="public/images/logo.png" alt="Alipen Solutions Agency Ltd Logo" class="brand-logo-img" />
+      </a>
+
+      <nav class="main-nav" aria-label="Main Navigation">
+        <a href="index.html" class="nav-link">Home</a>
+        <a href="products.html" class="nav-link active">Products Catalog</a>
+        <a href="about.html" class="nav-link">About Us</a>
+        <a href="contact.html" class="nav-link">Contact & Quotations</a>
+      </nav>
+
+      <div class="header-actions">
+        <a href="contact.html" class="quote-nav-btn" aria-label="Quote Basket">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path><line x1="3" y1="6" x2="21" y2="6"></line><path d="M16 10a4 4 0 0 1-8 0"></path></svg>
+          <span>Quote Basket</span>
+          <span class="quote-badge-count" style="display:none;">0</span>
+        </a>
+        <a href="contact.html" class="btn btn-primary btn-sm">Request Quote</a>
+        <button class="mobile-nav-toggle" aria-label="Open Mobile Menu">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Mobile Drawer Backdrop -->
+  <div class="drawer-backdrop"></div>
+
+  <!-- Mobile Drawer -->
+  <div class="mobile-drawer">
+    <div class="drawer-header">
+      <img src="public/images/logo.png" alt="Alipen Solutions Agency Ltd" style="height:40px; width:auto;" />
+      <button class="drawer-close" aria-label="Close Mobile Menu">&times;</button>
+    </div>
+    <div class="drawer-nav">
+      <a href="index.html">Home</a>
+      <a href="products.html" class="active">Products Catalog</a>
+      <a href="about.html">About Us</a>
+      <a href="contact.html">Request a Quote</a>
+    </div>
+    <div class="drawer-footer">
+      <p style="font-size:0.85rem; color:#64748B; margin-bottom:0.75rem;">
+        <strong>Peter Ogettoh</strong><br />
+        <a href="tel:+254712272463" style="color:#1652A0; font-weight:700;">+254 712 272 463</a><br />
+        Nairobi, Kenya
+      </p>
+      <a href="https://wa.me/254712272463" class="btn btn-whatsapp btn-sm" style="width:100%;">WhatsApp Direct</a>
+    </div>
+  </div>
+
+  <!-- Page Header -->
+  <section style="background:linear-gradient(135deg, #F8FAFC 0%, #EFF6FF 100%); padding:3.5rem 0 2.5rem 0; border-bottom:1px solid #E2E8F0;">
+    <div class="container">
+      <span class="section-label">Medical & Healthcare Inventory</span>
+      <h1 class="section-title" style="font-size:clamp(2rem, 3.5vw, 2.75rem);">Healthcare Equipment & Consumables Catalog</h1>
+      <p class="section-subtitle">
+        Certified diagnostic monitoring devices, medical imaging dry films, clinical consumables, and hospital furniture ready for delivery across Kenya.
+      </p>
+    </div>
+  </section>
+
+  <!-- Main Catalog Section -->
+  <section class="section">
+    <div class="container">
+      
+      <!-- Category Tabs -->
+      <div class="filter-tabs-bar" id="categoryTabs" role="group" aria-label="Filter products by category">
+        <button class="filter-tab-btn active" data-category="all">All Products (33)</button>
+        <button class="filter-tab-btn" data-category="imaging">Radiology & Imaging</button>
+        <button class="filter-tab-btn" data-category="critical">Critical Care & Patient Monitoring</button>
+        <button class="filter-tab-btn" data-category="outpatient">Outpatient & Diagnostics</button>
+        <button class="filter-tab-btn" data-category="surgical">Surgical & Disposables</button>
+        <button class="filter-tab-btn" data-category="furniture">Hospital Furniture</button>
+      </div>
+
+      <!-- Search & Sort Controls -->
+      <div class="catalog-controls-bar">
+        <div class="catalog-search-group">
+          <label for="searchInput">Search catalogue</label>
+          <div class="search-input-wrap">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="search" id="searchInput" class="search-input" autocomplete="off" placeholder="Search equipment, product or specification" />
+          </div>
+        </div>
+
+        <div class="catalog-sort-group">
+          <label for="sortSelect">Sort products</label>
+          <select id="sortSelect" class="catalog-sort-select">
+            <option value="featured">Featured first</option>
+            <option value="name-asc">Name: A to Z</option>
+            <option value="category">Medical category</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Active Filter Status -->
+      <div class="catalog-status-row">
+        <span id="filterStatus">Showing all 33 certified medical products</span>
+        <button type="button" id="resetFilterBtn" class="catalog-reset-btn" hidden>Clear search &amp; filters</button>
+      </div>
+
+      <aside class="complete-clinic-banner" aria-label="Complete clinic setup and procurement support">
+        <div>
+          <span class="badge badge-green">Complete Clinic Setup &amp; LPO Ready</span>
+          <h2>From equipment lists to delivered, invoice-ready healthcare facilities.</h2>
+          <p>Support for Local Purchase Orders (LPOs), Proforma Invoices, bulk quotations and delivery across all 47 counties in Kenya.</p>
+        </div>
+        <div class="clinic-banner-actions">
+          <a href="contact.html" class="btn btn-primary">Prepare a Facility Quote</a>
+          <a href="https://wa.me/254712272463?text=Hello%20Peter%20Ogettoh,%20I%20need%20support%20for%20a%20complete%20clinic%20setup%20and%20LPO." class="btn btn-whatsapp" target="_blank" rel="noopener noreferrer">WhatsApp Peter</a>
+        </div>
+      </aside>
+
+      <!-- Products Grid -->
+      <div class="product-grid" id="catalogGrid">
+        <!-- Injected dynamically via catalog renderer -->
+      </div>
+
+      <!-- Empty State -->
+      <div id="emptyState" style="display:none; text-align:center; padding:4rem 1rem; background:#fff; border-radius:12px; border:1px solid #E2E8F0;">
+        <div style="font-size:3rem; margin-bottom:1rem;">🔍</div>
+        <h3 style="font-size:1.4rem; color:#1E293B; margin-bottom:0.5rem;">No Matching Medical Products Found</h3>
+        <p style="color:#64748B; max-width:480px; margin:0 auto 1.5rem auto;">
+          We couldn't find any products matching your search query. Try searching for "oxygen", "monitor", "film", "gel", or reset your filters.
+        </p>
+        <button id="emptyResetBtn" class="btn btn-outline">Reset Catalog Filters</button>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Quote Assistance Band -->
+  <section class="section section-muted" style="border-top:1px solid #E2E8F0;">
+    <div class="container" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:2rem;">
+      <div style="max-width:650px;">
+        <span class="badge badge-green" style="margin-bottom:0.75rem;">Institutional Procurement</span>
+        <h3 style="font-size:1.75rem; font-weight:800; color:#1E293B; margin-bottom:0.5rem;">Need Multi-Item Quotes or Custom Bulk Invoices?</h3>
+        <p style="color:#475569; font-size:1rem; line-height:1.6;">
+          You can add multiple items to your Quote Basket and submit them together or reach out directly to Peter Ogettoh for immediate stock availability and delivery scheduling in Nairobi and across Kenya.
+        </p>
+      </div>
+      <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+        <a href="contact.html" class="btn btn-primary btn-lg">View Quote Basket</a>
+        <a href="https://wa.me/254712272463?text=Hello%20Peter%20Ogettoh,%20I%20have%20an%20inquiry%20regarding%20bulk%20equipment%20pricing." class="btn btn-whatsapp btn-lg">Chat with Peter</a>
+      </div>
+    </div>
+  </section>
+
+    <!-- Site Footer -->
+  <footer class="site-footer">
+    <div class="container footer-top">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <img src="public/images/logo.png" alt="Alipen Solutions Agency Ltd" style="height:38px; width:auto; background:#fff; padding:4px 10px; border-radius:6px; margin-bottom:0.5rem;" />
+          <p>
+            <strong>Alipen Solutions Agency Ltd</strong> (<em>--Empowering Health Solutions--</em>)<br />
+            Certified diagnostic monitoring equipment, radiology dry films, ultrasound gels, and hospital furniture supplying facilities across Nairobi and all 47 Kenyan counties.
+          </p>
+          <div style="font-size:0.8rem; color:#94A3B8;">
+            📍 Nairobi, Kenya • Verified Healthcare Partner
+          </div>
+        </div>
+
+        <div class="footer-col">
+          <h4>Core Product Sectors</h4>
+          <div class="footer-links">
+            <a href="products.html?category=critical">Diagnostic & Patient Monitoring</a>
+            <a href="products.html?category=imaging">Medical Imaging & Dry Films</a>
+            <a href="products.html?category=surgical">Ultrasound Gel & Steri Gauze</a>
+            <a href="products.html?category=furniture">Emergency Trolleys & Furniture</a>
+            <a href="products.html">All 33 Catalog Products</a>
+          </div>
+        </div>
+
+        <div class="footer-col">
+          <h4>Quick Navigation</h4>
+          <div class="footer-links">
+            <a href="index.html">Home</a>
+            <a href="products.html">Product Catalog</a>
+            <a href="about.html">About Us & Standards</a>
+            <a href="contact.html">Request a Quote</a>
+            <a href="https://wa.me/254712272463">WhatsApp (+254 712 272 463)</a>
+          </div>
+        </div>
+
+        <div class="footer-col">
+          <h4>Direct Contact</h4>
+          <div class="footer-contact-list">
+            <div><span style="color:#60A5FA; font-weight:700;">Contact:</span> Peter Ogettoh</div>
+            <div><span style="color:#60A5FA; font-weight:700;">Phone / WA:</span> <a href="tel:+254712272463" style="color:#fff; font-weight:600;">+254 712 272 463</a></div>
+            <div><span style="color:#60A5FA; font-weight:700;">Email:</span> <a href="mailto:info@alipen.co.ke" style="color:#CBD5E1;">info@alipen.co.ke</a></div>
+            <div><span style="color:#60A5FA; font-weight:700;">Location:</span> Nairobi, Kenya</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="container footer-bottom">
+      <div>
+        © 2026 Alipen Solutions Agency Ltd. All rights reserved. --Empowering Health Solutions--
+      </div>
+      <div>
+        Peter Ogettoh • +254 712 272 463 • Nairobi, Kenya
+      </div>
+    </div>
+  </footer>
+
+  <!-- Floating WhatsApp Action -->
+  <a href="https://wa.me/254712272463?text=Hello%20Peter%20Ogettoh,%20I%20am%20inquiring%20about%20your%20medical%20equipment%20catalog." class="floating-whatsapp-widget" target="_blank" rel="noopener noreferrer" aria-label="Chat on WhatsApp with Peter Ogettoh">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12.031 6.172c-3.181 0-5.767 2.586-5.768 5.766-.001 1.298.38 2.27 1.019 3.287l-.711 2.598 2.664-.698c.969.585 1.961.916 2.796.916 3.183 0 5.768-2.587 5.768-5.769 0-3.181-2.585-5.766-5.768-5.766zm9.969 5.767c0 5.485-4.484 9.969-9.969 9.969-1.688 0-3.272-.424-4.664-1.168l-5.367 1.407 1.431-5.234c-.84-1.449-1.331-3.125-1.331-4.974 0-5.485 4.484-9.969 9.969-9.969 5.485 0 9.969 4.484 9.969 9.969z"></path></svg>
+    <span>WhatsApp Peter Ogettoh</span>
+  </a>
+
+  <!-- Scripts -->
+  <script src="products.js" defer></script>
+  <script src="app.js" defer></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      let activeCategory = 'all';
+      let searchQuery = '';
+      let sortBy = 'featured';
+
+      // Check URL search params for category
+      const urlParams = new URLSearchParams(window.location.search);
+      const catParam = urlParams.get('category');
+      if (catParam) {
+        activeCategory = catParam;
+        document.querySelectorAll('.filter-tab-btn').forEach(btn => {
+          if (btn.getAttribute('data-category') === catParam) {
+            btn.classList.add('active');
+          } else {
+            btn.classList.remove('active');
+          }
+        });
+      }
+
+      const grid = document.getElementById('catalogGrid');
+      const emptyState = document.getElementById('emptyState');
+      const filterStatus = document.getElementById('filterStatus');
+      const searchInput = document.getElementById('searchInput');
+      const sortSelect = document.getElementById('sortSelect');
+      const resetBtn = document.getElementById('emptyResetBtn');
+      const toolbarResetBtn = document.getElementById('toolbarResetBtn');
+
+      function renderCatalog() {
+        let items = getAllProducts();
+
+        // 1. Filter by category
+        if (activeCategory !== 'all') {
+          const categoryGroups = {
+            imaging: ['imaging'],
+            critical: ['critical'],
+            outpatient: ['outpatient'],
+            surgical: ['surgical', 'consumables'],
+            furniture: ['furniture']
+          };
+
+          const allowed = categoryGroups[activeCategory] || [activeCategory];
+          items = items.filter(p => {
+            if (allowed.includes(p.category)) return true;
+            if (activeCategory === 'outpatient' && p.slug === 'ent-diagnostic-set') return true;
+            if (activeCategory === 'critical' && ['patient-monitor', 'quip-oxygen-concentrator-5l'].includes(p.slug)) return true;
+            if (activeCategory === 'imaging' && p.slug === 'rosmed-ultrasound-coupling-gel-5kg') return true;
+            if (activeCategory === 'surgical' && p.slug === 'medex-steri-gauze-absorbent-cotton') return true;
+            return false;
+          });
+        }
+
+        // 2. Filter by search query
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          items = items.filter(p => 
+            p.name.toLowerCase().includes(q) ||
+            p.shortName.toLowerCase().includes(q) ||
+            p.categoryLabel.toLowerCase().includes(q) ||
+            p.tagline.toLowerCase().includes(q) ||
+            p.description.toLowerCase().includes(q) ||
+            (p.features && p.features.some(f => f.toLowerCase().includes(q))) ||
+            (p.applications && p.applications.some(a => a.toLowerCase().includes(q)))
+          );
+        }
+
+        // 3. Sort items
+        if (sortBy === 'name-asc') {
+          items.sort((a, b) => a.name.localeCompare(b.name));
+        } else if (sortBy === 'category') {
+          items.sort((a, b) => a.category.localeCompare(b.category));
+        }
+
+        // Update status text
+        if (filterStatus) {
+          const categoryNames = {
+            all: 'all categories', imaging: 'Radiology & Imaging', critical: 'Critical Care & Patient Monitoring',
+            outpatient: 'Outpatient & Diagnostics', surgical: 'Surgical & Disposables', furniture: 'Hospital Furniture'
+          };
+          const categoryText = activeCategory === 'all' ? 'all categories' : categoryNames[activeCategory];
+          filterStatus.textContent = `Showing ${items.length} of ${getAllProducts().length} products · ${categoryText}${searchQuery ? ` · “${searchQuery}”` : ''}`;
+        }
+
+        if (toolbarResetBtn) {
+          toolbarResetBtn.hidden = activeCategory === 'all' && !searchQuery;
+        }
+
+        // Render cards
+        if (items.length === 0) {
+          grid.innerHTML = '';
+          emptyState.style.display = 'block';
+        } else {
+          emptyState.style.display = 'none';
+          grid.innerHTML = items.map(p => `
+            <article class="product-card">
+              <div class="product-card-thumb">
+                <span class="badge badge-blue product-card-badge">${p.badge}</span>
+                <img src="${p.image}" alt="${p.name}" loading="lazy" onerror="this.onerror=null; this.src='public/images/logo.png';" />
+              </div>
+              <div class="product-card-body">
+                <span class="product-card-category">${p.categoryLabel}</span>
+                <h2 class="product-card-title">${p.name}</h2>
+                <p class="product-card-desc">${p.packaging || p.tagline}</p>
+                <div class="product-card-footer">
+                  <div class="product-card-actions">
+                    <a href="product-detail.html?slug=${p.slug}" class="btn btn-outline btn-sm">View Details</a>
+                    <button type="button" class="btn btn-primary btn-sm" data-add-to-quote="${p.slug}">Request Quote</button>
+                  </div>
+                </div>
+              </div>
+            </article>
+          `).join('');
+        }
+      }
+
+      // Tab clicks
+      document.querySelectorAll('.filter-tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.filter-tab-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          activeCategory = btn.getAttribute('data-category');
+          renderCatalog();
+        });
+      });
+
+      // Search input with debouncing
+      let debounceTimer;
+      searchInput.addEventListener('input', (e) => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          searchQuery = e.target.value;
+          renderCatalog();
+        }, 200);
+      });
+
+      // Sort change
+      sortSelect.addEventListener('change', (e) => {
+        sortBy = e.target.value;
+        renderCatalog();
+      });
+
+      // Reset filters
+      if (resetBtn) {
+        resetBtn.addEventListener('click', () => {
+          activeCategory = 'all';
+          searchQuery = '';
+          searchInput.value = '';
+          document.querySelectorAll('.filter-tab-btn').forEach(b => {
+            if (b.getAttribute('data-category') === 'all') b.classList.add('active');
+            else b.classList.remove('active');
+          });
+          renderCatalog();
+        });
+      }
+
+      // Toolbar reset button
+      if (toolbarResetBtn) {
+        toolbarResetBtn.addEventListener('click', () => {
+          activeCategory = 'all';
+          searchQuery = '';
+          sortBy = 'featured';
+          searchInput.value = '';
+          sortSelect.value = 'featured';
+          document.querySelectorAll('.filter-tab-btn').forEach(b => {
+            b.classList.toggle('active', b.getAttribute('data-category') === 'all');
+          });
+          renderCatalog();
+        });
+      }
+
+      // Initial render
+      renderCatalog();
+    });
+  </script>
+</body>
+</html>
