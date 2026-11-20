@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Alipen Solutions Agency Ltd website and quote-request service."""
 
+from datetime import datetime, timezone
 import http.server
 import json
 import html
@@ -486,26 +487,58 @@ def escape(value):
 
 
 def format_items(items):
-    if not items:
-        return '<li>General catalogue and procurement inquiry</li>'
-    rows = []
-    for item in items:
+    """Render requested products as a compact HTML table and text list."""
+    rows = items or [{'name': 'General catalogue and procurement inquiry', 'quantity': 1}]
+    html_rows, text_rows = [], []
+    for item in rows:
         name = escape(item.get('name') or 'Medical product')
+        description = escape(item.get('description') or item.get('specifications') or item.get('category'))
         quantity = escape(item.get('quantity', 1))
-        rows.append(f'<li><strong>{name}</strong> — Quantity: {quantity}</li>')
-    return ''.join(rows)
+        price = escape(item.get('unitPrice') or item.get('unit_price') or item.get('price'))
+        total = escape(item.get('total'))
+        label = f'<strong>{name}</strong>'
+        if description:
+            label += f'<br /><span style="color:#64748b;font-size:12px;line-height:18px">{description}</span>'
+        values = (label, quantity, price or '&mdash;', total or '&mdash;')
+        aligns = ('left', 'center', 'right', 'right')
+        html_rows.append('<tr>' + ''.join(f'<td align="{align}" style="padding:11px 9px;border-bottom:1px solid #e2e8f0;vertical-align:top;overflow-wrap:anywhere">{value}</td>' for align, value in zip(aligns, values)) + '</tr>')
+        raw_description = item.get('description') or item.get('specifications') or item.get('category')
+        text_row = f'- {item.get("name") or "Medical product"}'
+        if raw_description:
+            text_row += f' — {raw_description}'
+        text_row += f' | Quantity: {item.get("quantity", 1)}'
+        raw_price = item.get('unitPrice') or item.get('unit_price') or item.get('price')
+        if raw_price:
+            text_row += f' | Unit price: {raw_price}'
+        if item.get('total'):
+            text_row += f' | Total: {item.get("total")}'
+        text_rows.append(text_row)
+    headers = (('Item / Product', 'left'), ('Qty', 'center'), ('Unit price', 'right'), ('Total', 'right'))
+    head = '<tr style="background:#edf4fb">' + ''.join(f'<th align="{align}" style="padding:9px;border-bottom:1px solid #cbd5e1;color:#0d3c78">{label}</th>' for label, align in headers) + '</tr>'
+    table = ('<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px;line-height:19px">' + f'<thead>{head}</thead><tbody>{"".join(html_rows)}</tbody></table>')
+    return table, '\n'.join(text_rows)
+
+
+def email_logo_url():
+    """Return a public logo URL, falling back from local development URLs."""
+    parsed = urllib.parse.urlparse(SITE_URL)
+    if parsed.scheme in ('http', 'https') and parsed.hostname not in (None, 'localhost', '127.0.0.1', '0.0.0.0'):
+        base_url = SITE_URL
+    else:
+        base_url = 'https://alipen-website.onrender.com'
+    return f'{base_url}/public/images/logo.png'
 
 
 def email_layout(title, body):
-    logo_url = f'{SITE_URL}/public/images/logo.png' if SITE_URL else ''
-    logo = (f'<img src="{escape(logo_url)}" alt="Alipen Solutions Agency Ltd" '
-            'style="height:72px;width:auto;object-fit:contain;" />') if logo_url else ''
-    return f'''<!doctype html><html><body style="margin:0;background:#f4f7fb;font-family:Arial,sans-serif;color:#1e293b">
-    <div style="max-width:680px;margin:24px auto;background:#fff;border-radius:14px;overflow:hidden;border:1px solid #e2e8f0">
-      <div style="padding:22px 28px;border-bottom:1px solid #e2e8f0;text-align:center">{logo}</div>
-      <div style="padding:28px"><h1 style="margin:0 0 12px;font-size:24px;color:#0d3c78">{escape(title)}</h1>{body}</div>
-      <div style="padding:18px 28px;background:#0f172a;color:#cbd5e1;font-size:13px">Alipen Solutions Agency Ltd • +254 712 272 463 • Nairobi, Kenya</div>
-    </div></body></html>'''
+    logo_url = escape(email_logo_url())
+    website_url = escape(email_logo_url().rsplit('/public/', 1)[0])
+    return f'''<!doctype html><html><body style="margin:0;padding:0;background:#f4f7fb;font-family:Arial,Helvetica,sans-serif;color:#1e293b">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;background:#f4f7fb"><tr><td align="center" style="padding:24px 12px">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="680" style="width:100%;max-width:680px;background:#ffffff;border:1px solid #e2e8f0;border-collapse:separate;border-spacing:0">
+        <tr><td align="center" style="padding:20px 24px 16px;border-bottom:1px solid #e2e8f0"><img src="{logo_url}" width="220" alt="Alipen Solutions Agency Ltd" style="display:block;width:220px;max-width:100%;height:auto;border:0" /><div style="padding-top:8px;font-size:12px;letter-spacing:1px;color:#64748b">ALIPEN SOLUTIONS AGENCY LTD</div></td></tr>
+        <tr><td style="padding:26px 24px"><h1 style="margin:0 0 16px;font-size:24px;line-height:30px;color:#0d3c78">{escape(title)}</h1>{body}</td></tr>
+        <tr><td style="padding:18px 24px;background:#0d3c78;color:#e2e8f0;font-size:13px;line-height:21px">Alipen Solutions Agency Ltd<br /><a href="tel:+254712272463" style="color:#ffffff;text-decoration:none">+254 712 272 463</a> &nbsp;|&nbsp; <a href="mailto:info@alipen.co.ke" style="color:#ffffff;text-decoration:none">info@alipen.co.ke</a><br />Nairobi, Kenya &nbsp;|&nbsp; <a href="{website_url}" style="color:#ffffff;text-decoration:underline">Visit our website</a></td></tr>
+      </table></td></tr></table></body></html>'''
 
 
 def _resend_error_code(response_body):
@@ -577,28 +610,21 @@ def resend_email(to_address, subject, html_body, text_body, notification_type='e
 
 
 def send_quote_emails(data, reference):
-    items_html = format_items(data.get('items', []))
-    shared_details = f'''
-      <p>We have received your quote request. Peter Ogettoh's team will review it shortly.</p>
-      <table style="width:100%;border-collapse:collapse;margin:18px 0">
-        <tr><td><strong>Reference</strong></td><td>{escape(reference)}</td></tr>
-        <tr><td><strong>Facility</strong></td><td>{escape(data['facility'])}</td></tr>
-        <tr><td><strong>Contact</strong></td><td>{escape(data['name'])}</td></tr>
-        <tr><td><strong>Phone</strong></td><td>{escape(data['phone'])}</td></tr>
-        <tr><td><strong>Location</strong></td><td>{escape(data.get('county', ''))}</td></tr>
-      </table>
-      <h3>Requested items</h3><ul style="line-height:1.8;padding-left:20px">{items_html}</ul>
-    '''
-    customer_html = email_layout('Your quote request has been received', shared_details +
-        '<p>Please keep this reference for follow-up. For additional information, reply to this email or call +254 712 272 463.</p>')
-    customer_text = (f"Dear {data['name']},\n\nWe received your quote request.\nReference: {reference}\n"
-                     f"Facility: {data['facility']}\nPhone: {data['phone']}\n\nAlipen Solutions Agency Ltd\n+254 712 272 463")
-
-    admin_body = shared_details + f'<p><strong>Email:</strong> {escape(data["email"])}</p><p><strong>Facility type:</strong> {escape(data.get("facilityType", ""))}</p><p><strong>Additional requirements:</strong><br />{escape(data.get("requirements", "None"))}</p>'
-    admin_html = email_layout(f'New quote request — {reference}', admin_body)
-    admin_text = (f"New quote request {reference}\nName: {data['name']}\nFacility: {data['facility']}\n"
-                  f"Email: {data['email']}\nPhone: {data['phone']}\nRequirements: {data.get('requirements', '')}")
-
+    items_html, items_text = format_items(data.get('items', []))
+    submitted = datetime.now(timezone.utc).strftime('%d %B %Y, %H:%M UTC')
+    ref_panel = (f'<div style="margin:0 0 18px;padding:13px 15px;background:#edf4fb;border-left:4px solid #0d3c78"><div style="font-size:11px;letter-spacing:.7px;color:#475569">QUOTE REFERENCE</div><div style="font-size:20px;font-weight:bold;line-height:28px;color:#0d3c78">{escape(reference)}</div></div>')
+    customer_rows = (('Name', data.get('name')), ('Facility / company', data.get('facility')), ('Email', data.get('email')), ('Phone', data.get('phone')), ('Location', data.get('county')), ('Facility type', data.get('facilityType')))
+    detail_rows = []
+    for label, value in customer_rows:
+        display = f'<a href="mailto:{escape(value)}" style="color:#0d3c78">{escape(value)}</a>' if label == 'Email' and value else escape(value) or 'Not provided'
+        detail_rows.append(f'<tr><td style="width:150px;padding:6px 10px 6px 0;color:#64748b;vertical-align:top">{escape(label)}</td><td style="padding:6px 0;vertical-align:top;overflow-wrap:anywhere">{display}</td></tr>')
+    details_html = '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;font-size:14px;line-height:21px">' + ''.join(detail_rows) + '</table>'
+    notes = data.get('requirements') or ''
+    customer_html = email_layout('We’ve received your quote request', f'''<p style="margin:0 0 16px;font-size:15px;line-height:23px">Hello {escape(data.get('name'))}, thank you for requesting a quote from Alipen. Your request has been received, and our team will review it and follow up with you.</p>{ref_panel}<h2 style="margin:22px 0 10px;font-size:16px;color:#0d3c78">Requested items</h2>{items_html}<h2 style="margin:22px 0 10px;font-size:16px;color:#0d3c78">Your details</h2>{details_html}<h2 style="margin:22px 0 10px;font-size:16px;color:#0d3c78">Your notes</h2><div style="padding:12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:14px;line-height:21px;white-space:pre-wrap">{escape(notes) or 'No additional notes provided.'}</div><p style="margin:20px 0 0;font-size:14px;line-height:22px">Please keep your quote reference for follow-up. Contact us at <a href="tel:+254712272463" style="color:#0d3c78">+254 712 272 463</a> or <a href="mailto:info@alipen.co.ke" style="color:#0d3c78">info@alipen.co.ke</a>.</p>''')
+    customer_text = (f"Hello {data.get('name')}, thank you for requesting a quote from Alipen. Your request has been received and our team will review it.\n\nQUOTE REFERENCE: {reference}\nSubmitted: {submitted}\n\nRequested items:\n{items_text}\n\nFacility / company: {data.get('facility')}\nEmail: {data.get('email')}\nPhone: {data.get('phone') or 'Not provided'}\nLocation: {data.get('county') or 'Not provided'}\n\nAdditional notes: {notes or 'None'}\n\nAlipen Solutions Agency Ltd\n+254 712 272 463 | info@alipen.co.ke\nNairobi, Kenya")
+    requirements_html = escape(notes) or 'No additional notes provided.'
+    admin_html = email_layout('New Quote Request Received', f'''<p style="margin:0 0 16px;color:#475569;font-size:14px;line-height:22px">A customer has submitted a quote request. Review the details below.</p>{ref_panel}<div style="margin:0 0 8px;color:#64748b;font-size:13px">Submitted: {escape(submitted)}</div><h2 style="margin:22px 0 10px;font-size:16px;color:#0d3c78">Customer information</h2>{details_html}<h2 style="margin:22px 0 10px;font-size:16px;color:#0d3c78">Requested items</h2>{items_html}<h2 style="margin:22px 0 10px;font-size:16px;color:#0d3c78">Additional notes</h2><div style="padding:12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:14px;line-height:21px;white-space:pre-wrap">{requirements_html}</div>''')
+    admin_text = (f"NEW QUOTE REQUEST RECEIVED\nReference: {reference}\nSubmitted: {submitted}\n\nCustomer information\nName: {data.get('name')}\nFacility / company: {data.get('facility')}\nEmail: {data.get('email')}\nPhone: {data.get('phone') or 'Not provided'}\nLocation: {data.get('county') or 'Not provided'}\nFacility type: {data.get('facilityType') or 'Not provided'}\n\nRequested items:\n{items_text}\n\nAdditional notes: {notes or 'No additional notes provided.'}")
     if not RESEND_API_KEY or not MAIL_FROM:
         missing = []
         if not RESEND_API_KEY:
@@ -606,20 +632,13 @@ def send_quote_emails(data, reference):
         if not MAIL_FROM:
             missing.append('MAIL_FROM')
         logger.error('Quote emails not sent reference=%s missing configuration=%s', reference, ','.join(missing))
-        status = 'not_configured'
-        return {'admin': status, 'customer': status}
+        return {'admin': 'not_configured', 'customer': 'not_configured'}
     if ADMIN_EMAIL:
-        admin_status = resend_email(
-            ADMIN_EMAIL, f'New Alipen quote request — {reference}', admin_html, admin_text,
-            notification_type='admin', reference=reference,
-        )
+        admin_status = resend_email(ADMIN_EMAIL, f'New Alipen quote request — {reference}', admin_html, admin_text, notification_type='admin', reference=reference)
     else:
         logger.error('Admin quote notification not sent reference=%s missing configuration=ADMIN_EMAIL', reference)
         admin_status = 'not_configured'
-    customer_status = resend_email(
-        data['email'], f'Quote request received — {reference}', customer_html, customer_text,
-        notification_type='customer', reference=reference,
-    )
+    customer_status = resend_email(data['email'], f'Quote request received — {reference}', customer_html, customer_text, notification_type='customer', reference=reference)
     return {'admin': admin_status, 'customer': customer_status}
 
 
@@ -686,7 +705,12 @@ def validate_submission(data):
         if quantity < 1 or quantity > 9999:
             return None, 'Product quantities must be between 1 and 9999.'
         if name:
-            cleaned_items.append({'name': name, 'quantity': quantity})
+            cleaned_item = {'name': name, 'quantity': quantity}
+            for field, limit in (('description', 1000), ('specifications', 1000), ('category', 160), ('unitPrice', 80), ('unit_price', 80), ('price', 80), ('total', 80)):
+                value = clean_text(item.get(field), limit)
+                if value:
+                    cleaned_item[field] = value
+            cleaned_items.append(cleaned_item)
     cleaned['items'] = cleaned_items
     return cleaned, None
 

@@ -67,6 +67,7 @@ class ServerTests(unittest.TestCase):
         server.RESEND_API_KEY = ''
         server.MAIL_FROM = ''
         server.ADMIN_EMAIL = ''
+        server.SITE_URL = ''
         server.ADMIN_USERNAME = ''
         server.ADMIN_PASSWORD_HASH = ''
 
@@ -460,6 +461,54 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(customer_payload['from'], admin_payload['from'])
         self.assertIn('ALIPEN-ABC123', admin_payload['subject'])
         self.assertIn('ALIPEN-ABC123', customer_payload['text'])
+
+    def test_quote_emails_render_matching_items_and_escape_customer_content(self):
+        server.RESEND_API_KEY = 'test-key'
+        server.MAIL_FROM = 'Alipen <test@example.com>'
+        server.ADMIN_EMAIL = 'kayvo18@gmail.com'
+        server.SITE_URL = 'http://localhost:3000'
+        sample = {
+            'name': '<Buyer & Co>', 'facility': 'Long Name Medical Facility',
+            'facilityType': 'Hospital', 'county': 'Nairobi', 'phone': '',
+            'email': 'buyer@example.com', 'requirements': '<script>no</script> Handle urgently',
+            'items': [
+                {'name': 'Advanced multi-parameter bedside patient monitor for high-acuity wards',
+                 'description': 'Long description & specifications <include> ECG, SpO2, NIBP, respiration and dual-channel temperature.',
+                 'quantity': 2, 'unitPrice': 'KES 125,000', 'total': 'KES 250,000'},
+                {'name': 'ECG thermal paper', 'quantity': 12},
+            ],
+        }
+        class AcceptedResponse:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+
+        with patch.object(server.urllib.request, 'urlopen', return_value=AcceptedResponse()) as send:
+            result = server.send_quote_emails(sample, 'ALIPEN-ABC123')
+        self.assertEqual(result, {'admin': 'accepted', 'customer': 'accepted'})
+        admin, customer = [json.loads(call.args[0].data) for call in send.call_args_list]
+        for message in (admin, customer):
+            self.assertIn('https://alipen-website.onrender.com/public/images/logo.png', message['html'])
+            self.assertIn('ALIPEN-ABC123', message['html'])
+            self.assertIn('Advanced multi-parameter bedside patient monitor', message['html'])
+            self.assertIn('Long description &amp; specifications &lt;include&gt;', message['html'])
+            self.assertIn('KES 125,000', message['html'])
+            self.assertIn('KES 250,000', message['html'])
+            self.assertIn('ECG thermal paper', message['text'])
+            self.assertIn('Quantity: 12', message['text'])
+            self.assertNotIn('<script>', message['html'])
+            self.assertNotIn('<Buyer & Co>', message['html'])
+        self.assertIn('New Quote Request Received', admin['html'])
+        self.assertIn('Handle urgently', admin['html'])
+        self.assertIn('Handle urgently', customer['html'])
+
+    def test_quote_email_template_handles_absent_optional_fields_and_prices(self):
+        table, text = server.format_items([{'name': 'Basic product', 'quantity': 3}])
+        self.assertIn('Basic product', table)
+        self.assertIn('>3<', table)
+        self.assertIn('&mdash;', table)
+        self.assertNotIn('KES', table)
+        self.assertEqual(text, '- Basic product | Quantity: 3')
 
     def test_missing_resend_configuration_is_logged_and_quote_still_succeeds(self):
         with self.assertLogs('server', level='ERROR') as logs:
