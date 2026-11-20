@@ -1124,6 +1124,53 @@ const PRODUCTS = [
       'Emergency departments'
     ],
     packaging: 'Stand or screen units packed separately or bundled.'
+  },
+  {
+    id: 34,
+    slug: 'antmed-high-pressure-syringe',
+    name: 'Antmed High Pressure Syringe (200ml Kit)',
+    shortName: 'Antmed High Pressure Syringe',
+    category: 'surgical',
+    categoryLabel: 'Surgical Dressings, Wound Care & Everyday Disposables',
+    tagline: 'Sterile 200ml high pressure syringe kit for contrast media injectors.',
+    image: 'public/images/catalogue/Antmed High Pressure Syringe.jpeg',
+    thumbnail: 'public/images/catalogue/Antmed High Pressure Syringe.jpeg',
+    badge: 'New Arrival',
+    leadTime: 'Available on Request',
+    priceEstimate: 'Request Institutional Quote',
+    description: 'A medical-grade 200ml high-pressure syringe kit designed for contrast media injectors. Includes a 200ml syringe, connecting tube, and two filling devices. Sterile, non-toxic, and non-pyrogenic.',
+    features: [
+      'High pressure compatibility designed for contrast media injectors and angiographic procedures',
+      'Kit contents: 1 × 200ml High Pressure Syringe, 1 × Connecting Tube, 2 × Filling Devices',
+      'Shatter-resistant, highly transparent barrel with clear 200ml graduation markings',
+      'Comes in sterile, peel-open blister packaging (sterile EO)',
+      'Pyrogen-free, non-toxic, and DEHP-free to ensure patient safety',
+      'Luer-lock connectors on tubing for secure, leak-free connections under high pressure',
+      'Designed for single-use to prevent cross-contamination',
+      'Ideal for radiology, cardiology, and CT/MRI imaging centers'
+    ],
+    specs: {
+      'Brand': 'ANTMED™',
+      'Part Number': '400104',
+      'Syringe Volume': '200ml',
+      'Kit Contents': '1 × 200ml Syringe, 1 × Connecting Tube, 2 × Filling Devices',
+      'Sterility': 'Sterile EO (Ethylene Oxide sterilized)',
+      'Safety': 'Non-Toxic, Non-Pyrogenic, DEHP-Free, Natural Rubber Latex-Free',
+      'Single Use': 'Do not reuse',
+      'Packaging': 'Individual sterile blister packs'
+    },
+    applications: [
+      'Radiology and angiographic procedures',
+      'Cardiology',
+      'CT and MRI imaging centers'
+    ],
+    accessories: [
+      '1 × 200ml High Pressure Syringe',
+      '1 × Connecting Tube with Luer-lock connectors',
+      '2 × Filling Devices'
+    ],
+    packaging: 'Individual sterile blister pack. Single-use only; do not reuse.',
+    ctaLink: '+254712272463'
   }
 ];
 
