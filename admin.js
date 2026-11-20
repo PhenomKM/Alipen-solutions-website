@@ -1,6 +1,10 @@
 (() => {
   const API = '/api/admin';
-  const state = { csrfToken: '', page: 1, pageSize: 20, total: 0, search: '', status: 'all', currentReference: '', quoteDialogScrollY: 0, isPrimary: false };
+  const state = {
+    csrfToken: '', page: 1, pageSize: 20, total: 0, search: '', status: 'all', currentReference: '', isPrimary: false,
+    quoteDialogScrollY: 0, quoteDialogOriginalStyle: null, quoteDialogOriginalStyleCaptured: false,
+    quoteDialogViewport: null, quoteDialogViewportSync: null
+  };
   const byId = (id) => document.getElementById(id);
 
   function makeElement(tag, className, text) {
@@ -163,6 +167,54 @@
     });
   }
 
+  function syncQuoteDialogToVisualViewport(dialog) {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    dialog.style.position = 'fixed';
+    dialog.style.inset = 'auto';
+    dialog.style.left = `${viewport.offsetLeft}px`;
+    dialog.style.top = `${viewport.offsetTop}px`;
+    dialog.style.right = 'auto';
+    dialog.style.bottom = 'auto';
+    dialog.style.width = `${viewport.width}px`;
+    dialog.style.height = `${viewport.height}px`;
+    dialog.style.maxWidth = 'none';
+    dialog.style.maxHeight = 'none';
+    dialog.style.margin = '0';
+    dialog.style.transform = 'none';
+    dialog.style.boxSizing = 'border-box';
+  }
+
+  function prepareQuoteDialogViewport(dialog) {
+    const viewport = window.visualViewport;
+    const isMobileViewport = window.matchMedia('(max-width: 720px)').matches || (viewport && viewport.width <= 720);
+    if (!viewport || !isMobileViewport) return;
+
+    state.quoteDialogOriginalStyle = dialog.getAttribute('style');
+    state.quoteDialogOriginalStyleCaptured = true;
+    state.quoteDialogViewport = viewport;
+    state.quoteDialogViewportSync = () => syncQuoteDialogToVisualViewport(dialog);
+    viewport.addEventListener('resize', state.quoteDialogViewportSync);
+    viewport.addEventListener('scroll', state.quoteDialogViewportSync);
+    window.addEventListener('resize', state.quoteDialogViewportSync);
+    state.quoteDialogViewportSync();
+  }
+
+  function restoreQuoteDialogViewport(dialog) {
+    if (!state.quoteDialogOriginalStyleCaptured) return;
+    if (state.quoteDialogViewport && state.quoteDialogViewportSync) {
+      state.quoteDialogViewport.removeEventListener('resize', state.quoteDialogViewportSync);
+      state.quoteDialogViewport.removeEventListener('scroll', state.quoteDialogViewportSync);
+      window.removeEventListener('resize', state.quoteDialogViewportSync);
+    }
+    if (state.quoteDialogOriginalStyle === null) dialog.removeAttribute('style');
+    else if (state.quoteDialogOriginalStyle !== null) dialog.setAttribute('style', state.quoteDialogOriginalStyle);
+    state.quoteDialogOriginalStyle = null;
+    state.quoteDialogOriginalStyleCaptured = false;
+    state.quoteDialogViewport = null;
+    state.quoteDialogViewportSync = null;
+  }
+
   function openAdminUserEditor(user) {
     if (!state.isPrimary) return;
     const form = byId('editAdminUserForm');
@@ -196,8 +248,9 @@
     byId('detailLoading').hidden = false;
     byId('detailContent').hidden = true;
     state.quoteDialogScrollY = window.scrollY;
-    dialog.showModal();
     try {
+      prepareQuoteDialogViewport(dialog);
+      dialog.showModal();
       const quote = await api(`/quotes/${encodeURIComponent(reference)}`);
       byId('detailReference').textContent = quote.reference;
       byId('detailStatusBadge').replaceChildren(makeElement('span', `status-pill ${statusClass(quote.status)}`, displayStatus(quote.status)));
@@ -221,7 +274,8 @@
       byId('detailLoading').hidden = true;
       byId('detailContent').hidden = false;
     } catch (error) {
-      dialog.close();
+      if (dialog.open) dialog.close();
+      else restoreQuoteDialogViewport(dialog);
       showNotice(error.message, true);
     }
   }
@@ -302,6 +356,7 @@
       if (event.target === quoteDialog) quoteDialog.close();
     });
     quoteDialog.addEventListener('close', () => {
+      restoreQuoteDialogViewport(quoteDialog);
       window.requestAnimationFrame(() => window.scrollTo(0, state.quoteDialogScrollY));
     });
     if (state.isPrimary) {
