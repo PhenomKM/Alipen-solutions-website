@@ -76,7 +76,7 @@ _admin_sessions = {}
 STATIC_ROOT_FILES = {
     'index.html', 'products.html', 'product-detail.html', 'about.html',
     'contact.html', 'admin-login.html', 'styles.css', 'app.js', 'products.js', 'script.js',
-    'admin.css', 'admin.js',
+    'admin.css', 'admin.js', 'admin-diagnostics-loader.js', 'admin-diagnostics.js',
 }
 ADMIN_STATUSES = {'received', 'in_progress', 'completed'}
 ADMIN_QUOTE_COLUMNS = (

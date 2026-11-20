@@ -164,7 +164,7 @@ button { cursor: pointer; }
   .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
-  html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
+  html, body { width: 100%; max-width: 100%; }
   .admin-layout { display: block; width: 100%; min-width: 0; }
   .admin-main-column, .admin-content { width: 100%; max-width: 100%; min-width: 0; }
   .admin-sidebar { position: fixed; left: 0; top: 0; width: min(82vw, 280px); transform: translateX(-105%); transition: transform .2s ease; box-shadow: 12px 0 35px rgba(15, 42, 75, .12); }
