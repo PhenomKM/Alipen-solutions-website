@@ -1,6 +1,6 @@
 (() => {
   const API = '/api/admin';
-  const state = { csrfToken: '', page: 1, pageSize: 20, total: 0, search: '', status: 'all', currentReference: '', isPrimary: false };
+  const state = { csrfToken: '', page: 1, pageSize: 20, total: 0, search: '', status: 'all', currentReference: '', quoteDialogScrollY: 0, isPrimary: false };
   const byId = (id) => document.getElementById(id);
 
   function makeElement(tag, className, text) {
@@ -195,6 +195,7 @@
     const dialog = byId('quoteDetailDialog');
     byId('detailLoading').hidden = false;
     byId('detailContent').hidden = true;
+    state.quoteDialogScrollY = window.scrollY;
     dialog.showModal();
     try {
       const quote = await api(`/quotes/${encodeURIComponent(reference)}`);
@@ -296,8 +297,12 @@
       if (state.page * state.pageSize < state.total) { state.page += 1; loadQuotes().catch((error) => showNotice(error.message, true)); }
     });
     byId('closeDetail').addEventListener('click', () => byId('quoteDetailDialog').close());
-    byId('quoteDetailDialog').addEventListener('click', (event) => {
-      if (event.target === byId('quoteDetailDialog')) byId('quoteDetailDialog').close();
+    const quoteDialog = byId('quoteDetailDialog');
+    quoteDialog.addEventListener('click', (event) => {
+      if (event.target === quoteDialog) quoteDialog.close();
+    });
+    quoteDialog.addEventListener('close', () => {
+      window.requestAnimationFrame(() => window.scrollTo(0, state.quoteDialogScrollY));
     });
     if (state.isPrimary) {
       byId('createAdminUserForm').addEventListener('submit', async (event) => {
