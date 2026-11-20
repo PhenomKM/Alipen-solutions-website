@@ -1,4 +1,5 @@
 import http.client
+import html
 import io
 import json
 import re
@@ -469,13 +470,16 @@ class ServerTests(unittest.TestCase):
         server.SITE_URL = 'http://localhost:3000'
         sample = {
             'name': '<Buyer & Co>', 'facility': 'Long Name Medical Facility',
-            'facilityType': 'Hospital', 'county': 'Nairobi', 'phone': '',
+            'facilityType': 'Hospital', 'county': 'Nairobi', 'phone': '+254700123456',
             'email': 'buyer@example.com', 'requirements': '<script>no</script> Handle urgently',
             'items': [
                 {'name': 'Advanced multi-parameter bedside patient monitor for high-acuity wards',
                  'description': 'Long description & specifications <include> ECG, SpO2, NIBP, respiration and dual-channel temperature.',
                  'quantity': 2, 'unitPrice': 'KES 125,000', 'total': 'KES 250,000'},
-                {'name': 'ECG thermal paper', 'quantity': 12},
+                {'name': 'ECG thermal paper', 'description': 'Z-fold and roll media for electrocardiographs.', 'quantity': 12},
+                {'name': 'QUIP 5-Litre Oxygen Concentrator',
+                 'description': 'Long description: medical-grade oxygen delivery for ward and home use.',
+                 'quantity': 1, 'unitPrice': 'KES 84,000'},
             ],
         }
         class AcceptedResponse:
@@ -483,21 +487,67 @@ class ServerTests(unittest.TestCase):
             def __enter__(self): return self
             def __exit__(self, *args): return False
 
+        cleaned, validation_error = server.validate_submission(sample)
+        self.assertIsNone(validation_error)
+        self.assertEqual(cleaned['items'], sample['items'])
         with patch.object(server.urllib.request, 'urlopen', return_value=AcceptedResponse()) as send:
-            result = server.send_quote_emails(sample, 'ALIPEN-ABC123')
+            result = server.send_quote_emails(cleaned, 'ALIPEN-ABC123')
         self.assertEqual(result, {'admin': 'accepted', 'customer': 'accepted'})
         admin, customer = [json.loads(call.args[0].data) for call in send.call_args_list]
         for message in (admin, customer):
             self.assertIn('https://alipen-website.onrender.com/public/images/logo.png', message['html'])
             self.assertIn('ALIPEN-ABC123', message['html'])
+            self.assertIn('&lt;Buyer &amp; Co&gt;', message['html'])
+            self.assertIn('Long Name Medical Facility', message['html'])
+            self.assertIn('<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;table-layout:fixed', message['html'])
+            self.assertIn('<th align="left"', message['html'])
+            self.assertIn('Description / Specifications', message['html'])
+            self.assertIn('<th align="center"', message['html'])
+            self.assertIn('Quantity', message['html'])
             self.assertIn('Advanced multi-parameter bedside patient monitor', message['html'])
             self.assertIn('Long description &amp; specifications &lt;include&gt;', message['html'])
+            self.assertIn('ECG thermal paper', message['html'])
+            self.assertIn('Z-fold and roll media for electrocardiographs.', message['html'])
+            self.assertIn('QUIP 5-Litre Oxygen Concentrator', message['html'])
+            self.assertIn('Long description: medical-grade oxygen delivery', message['html'])
+            self.assertIn('>2</td>', message['html'])
+            self.assertIn('>12</td>', message['html'])
+            self.assertIn('>1</td>', message['html'])
             self.assertIn('KES 125,000', message['html'])
             self.assertIn('KES 250,000', message['html'])
+            self.assertIn('KES 84,000', message['html'])
             self.assertIn('ECG thermal paper', message['text'])
             self.assertIn('Quantity: 12', message['text'])
+            self.assertEqual(message['from'], 'Alipen <test@example.com>')
             self.assertNotIn('<script>', message['html'])
             self.assertNotIn('<Buyer & Co>', message['html'])
+            table_body = re.search(r'Description / Specifications.*?<tbody>(.*?)</tbody>', message['html'], re.DOTALL).group(1)
+            rows = re.findall(r'<tr>(.*?)</tr>', table_body, re.DOTALL)
+            self.assertEqual(len(rows), 3)
+            table_cells = [[html.unescape(re.sub(r'<[^>]+>', '', cell)).strip()
+                            for cell in re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)]
+                           for row in rows]
+            self.assertEqual(table_cells[0], [
+                'Advanced multi-parameter bedside patient monitor for high-acuity wards',
+                'Long description & specifications <include> ECG, SpO2, NIBP, respiration and dual-channel temperature.',
+                '2', 'KES 125,000', 'KES 250,000',
+            ])
+            self.assertEqual(table_cells[1], [
+                'ECG thermal paper', 'Z-fold and roll media for electrocardiographs.', '12', '—', '—',
+            ])
+            self.assertEqual(table_cells[2], [
+                'QUIP 5-Litre Oxygen Concentrator',
+                'Long description: medical-grade oxygen delivery for ward and home use.',
+                '1', 'KES 84,000', '—',
+            ])
+        self.assertEqual(admin['to'], ['kayvo18@gmail.com'])
+        self.assertEqual(customer['to'], ['buyer@example.com'])
+        self.assertIn('New Alipen quote request — ALIPEN-ABC123', admin['subject'])
+        self.assertIn('Quote request received — ALIPEN-ABC123', customer['subject'])
+        self.assertIn('New Quote Request Received', admin['html'])
+        self.assertIn('We’ve received your quote request', customer['html'])
+        self.assertIn('Handle urgently', admin['html'])
+        self.assertIn('Handle urgently', customer['html'])
         self.assertIn('New Quote Request Received', admin['html'])
         self.assertIn('Handle urgently', admin['html'])
         self.assertIn('Handle urgently', customer['html'])

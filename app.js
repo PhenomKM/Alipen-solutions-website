@@ -53,6 +53,7 @@ const QuoteBasket = {
         name: product.name,
         shortName: product.shortName || product.name,
         category: product.categoryLabel,
+        description: product.description || '',
         image: product.image,
         quantity: quantity
       });

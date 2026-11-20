@@ -492,17 +492,14 @@ def format_items(items):
     html_rows, text_rows = [], []
     for item in rows:
         name = escape(item.get('name') or 'Medical product')
-        description = escape(item.get('description') or item.get('specifications') or item.get('category'))
+        raw_description = item.get('description') or item.get('specifications') or item.get('category')
+        description = escape(raw_description) or '&mdash;'
         quantity = escape(item.get('quantity', 1))
         price = escape(item.get('unitPrice') or item.get('unit_price') or item.get('price'))
         total = escape(item.get('total'))
-        label = f'<strong>{name}</strong>'
-        if description:
-            label += f'<br /><span style="color:#64748b;font-size:12px;line-height:18px">{description}</span>'
-        values = (label, quantity, price or '&mdash;', total or '&mdash;')
-        aligns = ('left', 'center', 'right', 'right')
-        html_rows.append('<tr>' + ''.join(f'<td align="{align}" style="padding:11px 9px;border-bottom:1px solid #e2e8f0;vertical-align:top;overflow-wrap:anywhere">{value}</td>' for align, value in zip(aligns, values)) + '</tr>')
-        raw_description = item.get('description') or item.get('specifications') or item.get('category')
+        values = (f'<strong>{name}</strong>', description, quantity, price or '&mdash;', total or '&mdash;')
+        aligns = ('left', 'left', 'center', 'right', 'right')
+        html_rows.append('<tr>' + ''.join(f'<td align="{align}" style="padding:11px 8px;border-bottom:1px solid #e2e8f0;vertical-align:top;overflow-wrap:anywhere;word-break:normal">{value}</td>' for align, value in zip(aligns, values)) + '</tr>')
         text_row = f'- {item.get("name") or "Medical product"}'
         if raw_description:
             text_row += f' — {raw_description}'
@@ -513,16 +510,16 @@ def format_items(items):
         if item.get('total'):
             text_row += f' | Total: {item.get("total")}'
         text_rows.append(text_row)
-    headers = (('Item / Product', 'left'), ('Qty', 'center'), ('Unit price', 'right'), ('Total', 'right'))
+    headers = (('Item', 'left'), ('Description / Specifications', 'left'), ('Quantity', 'center'), ('Unit Price', 'right'), ('Total', 'right'))
     head = '<tr style="background:#edf4fb">' + ''.join(f'<th align="{align}" style="padding:9px;border-bottom:1px solid #cbd5e1;color:#0d3c78">{label}</th>' for label, align in headers) + '</tr>'
-    table = ('<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px;line-height:19px">' + f'<thead>{head}</thead><tbody>{"".join(html_rows)}</tbody></table>')
+    table = ('<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;table-layout:fixed;border-collapse:collapse;margin:10px 0;font-size:12px;line-height:18px">' + f'<thead>{head}</thead><tbody>{"".join(html_rows)}</tbody></table>')
     return table, '\n'.join(text_rows)
 
 
 def email_logo_url():
     """Return a public logo URL, falling back from local development URLs."""
     parsed = urllib.parse.urlparse(SITE_URL)
-    if parsed.scheme in ('http', 'https') and parsed.hostname not in (None, 'localhost', '127.0.0.1', '0.0.0.0'):
+    if parsed.scheme == 'https' and parsed.hostname not in (None, 'localhost', '127.0.0.1', '0.0.0.0'):
         base_url = SITE_URL
     else:
         base_url = 'https://alipen-website.onrender.com'
