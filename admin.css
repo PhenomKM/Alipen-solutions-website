@@ -161,7 +161,9 @@ button { cursor: pointer; }
   .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
-  .admin-layout { display: block; }
+  html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
+  .admin-layout { display: block; width: 100vw; min-width: 0; }
+  .admin-main-column, .admin-content { width: 100%; max-width: 100%; min-width: 0; }
   .admin-sidebar { position: fixed; left: 0; top: 0; width: min(82vw, 280px); transform: translateX(-105%); transition: transform .2s ease; box-shadow: 12px 0 35px rgba(15, 42, 75, .12); }
   .admin-sidebar.open { transform: translateX(0); }
   .sidebar-toggle { display: block; }
@@ -188,14 +190,23 @@ button { cursor: pointer; }
   .user-create-form { grid-template-columns: 1fr; padding: 15px; }
   .user-create-form .admin-button { width: 100%; }
   .admin-user-edit-form { padding: 18px; }
-  .detail-dialog { width: auto; max-width: none; height: auto; max-height: calc(100dvh - 24px); margin: auto 12px; border-radius: 14px; overscroll-behavior: contain; }
-  .detail-dialog[open] { margin: auto 12px; }
+  .detail-dialog { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); width: calc(100vw - 24px); max-width: 520px; height: auto; max-height: calc(100dvh - 24px); margin: 0; border-radius: 14px; overscroll-behavior: contain; font-size: 14px; }
+  .detail-dialog[open] { display: block; }
+  .detail-dialog::backdrop { background: rgba(15, 23, 42, .58); backdrop-filter: none; }
   .dialog-heading { padding-top: 15px; padding-bottom: 15px; }
   .dialog-heading h2 { font-size: 18px; }
   .detail-reference { flex-wrap: wrap; gap: 7px 10px; }
+  .detail-reference { padding-top: 13px; padding-bottom: 13px; font-size: 12px; }
   .detail-reference .status-pill { margin-left: auto; }
+  .detail-field { gap: 5px; }
+  .detail-field span { font-size: 12px; }
+  .detail-field strong, .detail-items, .requirements-text { font-size: 14px; line-height: 1.5; }
+  .detail-section h3, .status-editor label { font-size: 14px; }
+  .detail-grid { gap: 14px; padding-top: 16px; padding-bottom: 16px; }
+  .detail-section { padding-top: 15px; padding-bottom: 15px; }
   .status-editor > div { flex-direction: column; }
   .status-editor select, .status-editor .admin-button { width: 100%; min-height: 44px; }
+  .status-editor select { font-size: 16px; }
   .sidebar-toggle { width: 40px; height: 44px; margin-left: -7px; border-radius: 8px; }
   .sidebar-toggle:focus-visible, .admin-nav-link:focus-visible, button:focus-visible { outline: 3px solid rgba(22, 82, 160, .38); outline-offset: 2px; }
   .admin-nav-link { min-height: 48px; }
