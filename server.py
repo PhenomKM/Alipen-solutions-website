@@ -55,6 +55,7 @@ PORT = int(os.environ.get('PORT', '3000'))
 HOST = '0.0.0.0'
 DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
 SITE_URL = os.environ.get('SITE_URL', '').rstrip('/')
+RENDER_EXTERNAL_URL = os.environ.get('RENDER_EXTERNAL_URL', '').rstrip('/')
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '').strip()
 MAIL_FROM = os.environ.get('MAIL_FROM', '').strip()
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
@@ -495,35 +496,27 @@ def format_items(items):
         raw_description = item.get('description') or item.get('specifications') or item.get('category')
         description = escape(raw_description) or '&mdash;'
         quantity = escape(item.get('quantity', 1))
-        price = escape(item.get('unitPrice') or item.get('unit_price') or item.get('price'))
-        total = escape(item.get('total'))
-        values = (f'<strong>{name}</strong>', description, quantity, price or '&mdash;', total or '&mdash;')
-        aligns = ('left', 'left', 'center', 'right', 'right')
+        values = (f'<strong>{name}</strong>', description, quantity)
+        aligns = ('left', 'left', 'center')
         html_rows.append('<tr>' + ''.join(f'<td align="{align}" style="padding:11px 8px;border-bottom:1px solid #e2e8f0;vertical-align:top;overflow-wrap:anywhere;word-break:normal">{value}</td>' for align, value in zip(aligns, values)) + '</tr>')
         text_row = f'- {item.get("name") or "Medical product"}'
         if raw_description:
             text_row += f' — {raw_description}'
         text_row += f' | Quantity: {item.get("quantity", 1)}'
-        raw_price = item.get('unitPrice') or item.get('unit_price') or item.get('price')
-        if raw_price:
-            text_row += f' | Unit price: {raw_price}'
-        if item.get('total'):
-            text_row += f' | Total: {item.get("total")}'
         text_rows.append(text_row)
-    headers = (('Item', 'left'), ('Description / Specifications', 'left'), ('Quantity', 'center'), ('Unit Price', 'right'), ('Total', 'right'))
+    headers = (('Item', 'left'), ('Description / Specifications', 'left'), ('Quantity', 'center'))
     head = '<tr style="background:#edf4fb">' + ''.join(f'<th align="{align}" style="padding:9px;border-bottom:1px solid #cbd5e1;color:#0d3c78">{label}</th>' for label, align in headers) + '</tr>'
     table = ('<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;table-layout:fixed;border-collapse:collapse;margin:10px 0;font-size:12px;line-height:18px">' + f'<thead>{head}</thead><tbody>{"".join(html_rows)}</tbody></table>')
     return table, '\n'.join(text_rows)
 
 
 def email_logo_url():
-    """Return a public logo URL, falling back from local development URLs."""
-    parsed = urllib.parse.urlparse(SITE_URL)
-    if parsed.scheme == 'https' and parsed.hostname not in (None, 'localhost', '127.0.0.1', '0.0.0.0'):
-        base_url = SITE_URL
-    else:
-        base_url = 'https://alipen-website.onrender.com'
-    return f'{base_url}/public/images/logo.png'
+    """Build the logo URL from Render's assigned public URL or a configured public site URL."""
+    for candidate in (RENDER_EXTERNAL_URL, SITE_URL):
+        parsed = urllib.parse.urlparse(candidate)
+        if parsed.scheme == 'https' and parsed.hostname not in (None, 'localhost', '127.0.0.1', '0.0.0.0'):
+            return f'{candidate}/public/images/logo.png'
+    return 'https://alipen-website.onrender.com/public/images/logo.png'
 
 
 def email_layout(title, body):

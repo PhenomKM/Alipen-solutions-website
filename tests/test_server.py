@@ -69,6 +69,7 @@ class ServerTests(unittest.TestCase):
         server.MAIL_FROM = ''
         server.ADMIN_EMAIL = ''
         server.SITE_URL = ''
+        server.RENDER_EXTERNAL_URL = ''
         server.ADMIN_USERNAME = ''
         server.ADMIN_PASSWORD_HASH = ''
 
@@ -468,6 +469,7 @@ class ServerTests(unittest.TestCase):
         server.MAIL_FROM = 'Alipen <test@example.com>'
         server.ADMIN_EMAIL = 'kayvo18@gmail.com'
         server.SITE_URL = 'http://localhost:3000'
+        server.RENDER_EXTERNAL_URL = 'https://alipen-website.onrender.com'
         sample = {
             'name': '<Buyer & Co>', 'facility': 'Long Name Medical Facility',
             'facilityType': 'Hospital', 'county': 'Nairobi', 'phone': '+254700123456',
@@ -513,9 +515,13 @@ class ServerTests(unittest.TestCase):
             self.assertIn('>2</td>', message['html'])
             self.assertIn('>12</td>', message['html'])
             self.assertIn('>1</td>', message['html'])
-            self.assertIn('KES 125,000', message['html'])
-            self.assertIn('KES 250,000', message['html'])
-            self.assertIn('KES 84,000', message['html'])
+            self.assertNotIn('Unit Price', message['html'])
+            headers_html = re.search(r'<thead>(.*?)</thead>', message['html'], re.DOTALL).group(1)
+            self.assertEqual(len(re.findall(r'<th\b', headers_html)), 3)
+            self.assertNotIn('Total', headers_html)
+            self.assertNotIn('KES 125,000', message['html'])
+            self.assertNotIn('KES 250,000', message['html'])
+            self.assertNotIn('KES 84,000', message['html'])
             self.assertIn('ECG thermal paper', message['text'])
             self.assertIn('Quantity: 12', message['text'])
             self.assertEqual(message['from'], 'Alipen <test@example.com>')
@@ -530,15 +536,15 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(table_cells[0], [
                 'Advanced multi-parameter bedside patient monitor for high-acuity wards',
                 'Long description & specifications <include> ECG, SpO2, NIBP, respiration and dual-channel temperature.',
-                '2', 'KES 125,000', 'KES 250,000',
+                '2',
             ])
             self.assertEqual(table_cells[1], [
-                'ECG thermal paper', 'Z-fold and roll media for electrocardiographs.', '12', '—', '—',
+                'ECG thermal paper', 'Z-fold and roll media for electrocardiographs.', '12',
             ])
             self.assertEqual(table_cells[2], [
                 'QUIP 5-Litre Oxygen Concentrator',
                 'Long description: medical-grade oxygen delivery for ward and home use.',
-                '1', 'KES 84,000', '—',
+                '1',
             ])
         self.assertEqual(admin['to'], ['kayvo18@gmail.com'])
         self.assertEqual(customer['to'], ['buyer@example.com'])
@@ -548,17 +554,27 @@ class ServerTests(unittest.TestCase):
         self.assertIn('We’ve received your quote request', customer['html'])
         self.assertIn('Handle urgently', admin['html'])
         self.assertIn('Handle urgently', customer['html'])
-        self.assertIn('New Quote Request Received', admin['html'])
-        self.assertIn('Handle urgently', admin['html'])
-        self.assertIn('Handle urgently', customer['html'])
 
     def test_quote_email_template_handles_absent_optional_fields_and_prices(self):
         table, text = server.format_items([{'name': 'Basic product', 'quantity': 3}])
         self.assertIn('Basic product', table)
         self.assertIn('>3<', table)
         self.assertIn('&mdash;', table)
+        self.assertNotIn('Unit Price', table)
+        self.assertNotIn('Total', table)
         self.assertNotIn('KES', table)
         self.assertEqual(text, '- Basic product | Quantity: 3')
+
+    def test_public_logo_asset_is_served_at_email_url_path(self):
+        status, body, headers = self.request('GET', '/public/images/logo.png')
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get('Content-Type'), 'image/png')
+        self.assertEqual(body, (Path(server.DIRECTORY) / 'public/images/logo.png').read_bytes())
+
+    def test_email_logo_url_uses_assigned_public_render_url(self):
+        server.RENDER_EXTERNAL_URL = 'https://assigned-service.onrender.com'
+        server.SITE_URL = 'https://custom-domain.example'
+        self.assertEqual(server.email_logo_url(), 'https://assigned-service.onrender.com/public/images/logo.png')
 
     def test_missing_resend_configuration_is_logged_and_quote_still_succeeds(self):
         with self.assertLogs('server', level='ERROR') as logs:
