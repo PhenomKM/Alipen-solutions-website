@@ -1171,6 +1171,107 @@ const PRODUCTS = [
     ],
     packaging: 'Individual sterile blister pack. Single-use only; do not reuse.',
     ctaLink: '+254712272463'
+  },
+  {
+    id: 35,
+    slug: 'agfa-drystar-dt5b-film',
+    name: 'AGFA DRYSTAR DT 5 B Dry Medical Film',
+    shortName: 'AGFA DRYSTAR DT 5 B Film',
+    category: 'imaging',
+    categoryLabel: 'Radiology & Medical Imaging',
+    tagline: 'High-contrast blue-base dry film for AGFA DRYSTAR imagers.',
+    image: 'public/images/catalogue/AGFA DRYSTAR DT 5.jpeg',
+    thumbnail: 'public/images/catalogue/AGFA DRYSTAR DT 5.jpeg',
+    badge: 'Diagnostic Grade',
+    leadTime: 'Available on Request',
+    priceEstimate: 'Request Institutional Quote',
+    description: 'High-contrast, blue-base direct digital dry medical film engineered for AGFA DRYSTAR imagers. Available in standard diagnostic sizes (100 NIF per box).',
+    features: [
+      'High diagnostic optical density (Dmax > 3.0) with crisp grayscale rendition for X-ray, CT, and MRI',
+      'Direct digital dry thermal processing requires no wet chemicals, darkroom, or water',
+      'Daylight-compatible, non-interleaved packaging for fast magazine loading',
+      'Blue-base polyester support for diagnostic viewing on standard lightboxes',
+      'Available in standard clinical sizes including 8x10, 10x12, 11x14, and 14x17 inches',
+      'Long archival stability for permanent patient diagnostic records'
+    ],
+    specs: {
+      'Brand': 'AGFA HealthCare',
+      'Model': 'DRYSTAR DT 5 B',
+      'Base Type': 'Blue-base polyester dry thermal film',
+      'Packaging': '100 NIF (Non-Interleaved Film) sheets per box',
+      'Available Sizes': '8x10 in (20x25 cm), 10x12 in, 11x14 in, 14x17 in (35x43 cm)',
+      'Compatibility': 'AGFA DRYSTAR 5300, 5302, 5500, 5503, and AXYS dry imagers'
+    },
+    applications: ['X-ray, CT, and MRI diagnostic image printing'],
+    packaging: '100 NIF sheets per box.',
+    ctaLink: '+254712272463'
+  },
+  {
+    id: 36,
+    slug: 'fujifilm-di-hl-dry-film',
+    name: 'FUJIFILM DI-HL Medical Dry Imaging Film',
+    shortName: 'FUJIFILM DI-HL Film',
+    category: 'imaging',
+    categoryLabel: 'Radiology & Medical Imaging',
+    tagline: 'Sharp, stable diagnostic imaging film for Fujifilm DRYPIX printers.',
+    image: 'public/images/catalogue/Fujifilm.jpeg',
+    thumbnail: 'public/images/catalogue/Fujifilm.jpeg',
+    badge: 'Diagnostic Grade',
+    leadTime: 'Available on Request',
+    priceEstimate: 'Request Institutional Quote',
+    description: 'Genuine blue-base dry laser imaging film delivering diagnostic detail for Fujifilm DRYPIX medical printers (100 NIF, 14x17 in).',
+    features: [
+      'High resolution and tonal stability tailored for CT, MRI, CR, and DR radiography',
+      'Dry thermal development with no chemical waste or odor',
+      'Low-fog, high-contrast blue polyester base for clear anatomical visualization',
+      'Anti-static, moisture-resistant coating helps prevent sheet sticking',
+      'Factory-sealed 100 NIF carton with batch traceability and long shelf life'
+    ],
+    specs: {
+      'Brand': 'FUJIFILM Corporation (Made in Japan)',
+      'Model': 'DI-HL (Blue Base)',
+      'Reference Code': '47410 22257',
+      'Sheet Size': '35x43 cm (14x17 in); other sizes available on request',
+      'Packaging': '100 NIF sheets per carton',
+      'Compatibility': 'Fujifilm DRYPIX Smart, Plus, Edge, Lite, and 4000/7000'
+    },
+    applications: ['CT, MRI, CR, and DR diagnostic imaging'],
+    packaging: '100 NIF sheets per carton.',
+    ctaLink: '+254712272463'
+  },
+  {
+    id: 37,
+    slug: 'philips-iu22-ultrasound',
+    name: 'Philips iU22 Intelligent Ultrasound System',
+    shortName: 'Philips iU22 Ultrasound System',
+    category: 'imaging',
+    categoryLabel: 'Radiology & Medical Imaging',
+    tagline: 'Versatile shared-service ultrasound imaging for multiple specialties.',
+    image: 'public/images/catalogue/Philips iU22 Ultrasound System.jpeg',
+    thumbnail: 'public/images/catalogue/Philips iU22 Ultrasound System.jpeg',
+    badge: 'Clinical Imaging',
+    leadTime: 'Available on Request',
+    priceEstimate: 'Request Institutional Quote',
+    description: 'Premium shared-service mobile ultrasound machine featuring xRES and SonoCT imaging, articulated LCD display, touchscreen control panel, and multi-probe versatility.',
+    features: [
+      'xRES Adaptive Image Processing and SonoCT Real-Time Compound Imaging',
+      'Multi-specialty use in General Imaging, OB/GYN, Vascular, Small Parts, and Cardiology',
+      '17-inch high-resolution flat-panel LCD monitor on an articulating arm plus interactive touchscreen',
+      'Ergonomic console with customizable workflow keys, TGC sliders, and central trackball',
+      'Multiple active transducer ports for switching between convex, linear, and endocavitary probes',
+      'Mobile cart with lockable casters and integrated probe and gel holders'
+    ],
+    specs: {
+      'Brand': 'PHILIPS',
+      'Model': 'iU22',
+      'Imaging Modes': '2D, 3D/4D, M-Mode, Color Flow Doppler, Power Doppler, PW/CW Doppler',
+      'Display': '17-inch articulating flat-panel LCD and integrated touchscreen console',
+      'Power Supply': '100V-240V~, 50Hz/60Hz',
+      'Connectivity': 'DICOM networking, USB, and thermal video printer support'
+    },
+    applications: ['General Imaging', 'OB/GYN', 'Vascular', 'Small Parts', 'Cardiology'],
+    packaging: 'Mobile ultrasound system; configuration and probes available on request.',
+    ctaLink: '+254712272463'
   }
 ];
 
