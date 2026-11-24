@@ -8,7 +8,8 @@
   <title>Quote Management | Alipen Solutions</title>
   <link rel="icon" type="image/png" href="public/images/favicon.png" />
   <link rel="stylesheet" href="admin.css" />
-  <script src="admin.js?v=portal-init-20261124" defer></script>
+  <script src="products.js" defer></script>
+  <script src="admin.js?v=invoice-manager-20261124" defer></script>
   <script src="admin-diagnostics-loader.js" defer></script>
 </head>
 <body class="admin-app" data-admin-page="dashboard">
@@ -39,7 +40,7 @@
     <div class="admin-main-column">
       <header class="admin-topbar">
         <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-label="Open navigation" aria-expanded="false">☰</button>
-        <div class="topbar-context"><span class="topbar-dot"></span> Quote management</div>
+        <div class="topbar-context"><span class="topbar-dot"></span> Administration</div>
         <div class="admin-account">
           <span class="account-avatar" aria-hidden="true">A</span>
           <span id="adminUsernameLabel" class="account-name">Administrator</span>
@@ -91,11 +92,13 @@
         </section>
 
         <section id="documentsView" class="admin-view" aria-labelledby="documentsTitle" hidden>
-          <div class="page-heading"><div><span class="page-eyebrow">DOCUMENTS</span><h1 id="documentsTitle">Invoice templates</h1><p>Download branded templates and fill in confirmed transaction details.</p></div></div>
-          <section class="admin-panel documents-panel"><div class="document-downloads">
-            <article class="document-card"><span class="document-type">DOCX</span><h2>Editable invoice template</h2><p>Open in Microsoft Word or a compatible editor and replace the bracketed placeholders.</p><a class="admin-button admin-button-primary" href="/api/admin/documents/invoice-template.docx" download>Download Word template</a></article>
-            <article class="document-card"><span class="document-type">PDF</span><h2>Printable invoice template</h2><p>Print or use as a reference. Complete the transaction fields before issuing.</p><a class="admin-button admin-button-primary" href="/api/admin/documents/invoice-template.pdf" download>Download PDF template</a></article>
-          </div><p class="document-reminder">Payment, tax, and address fields remain editable placeholders until verified business details are supplied.</p></section>
+          <div class="page-heading invoice-page-heading"><div><span class="page-eyebrow">BILLING</span><h1 id="documentsTitle">Invoices</h1><p>Create, review, and track customer invoices.</p></div><button id="createNewInvoice" class="admin-button admin-button-primary" type="button">Create new invoice</button></div>
+          <section class="admin-panel invoice-list-panel">
+            <div class="invoice-toolbar"><div class="invoice-tabs" role="tablist" aria-label="Invoice payment status"><button type="button" class="invoice-tab active" data-invoice-status="new" role="tab" aria-selected="true">New invoices</button><button type="button" class="invoice-tab" data-invoice-status="paid" role="tab" aria-selected="false">Paid invoices</button></div><label class="invoice-search"><span class="sr-only">Search invoices</span><input id="invoiceSearch" type="search" maxlength="120" placeholder="Search invoice, customer, company, or email" /></label></div>
+            <div class="table-scroll"><table class="admin-table invoice-table"><thead><tr><th>Invoice number</th><th>Customer</th><th>Invoice date</th><th>Due date</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody id="invoiceRows"></tbody></table></div>
+            <p id="invoicesEmpty" class="empty-state" hidden>No invoices found.</p><div class="pagination"><span id="invoicePageSummary" class="page-summary">—</span><div><button id="invoicePreviousPage" class="page-button" type="button" disabled>← Previous</button><button id="invoiceNextPage" class="page-button" type="button" disabled>Next →</button></div></div>
+          </section>
+          <details class="blank-invoice-templates"><summary>Download blank invoice templates</summary><div class="document-downloads"><a class="admin-button" href="/api/admin/documents/invoice-template.docx" download>Download Word template</a><a class="admin-button" href="/api/admin/documents/invoice-template.pdf" download>Download PDF template</a></div><p class="document-reminder">Unverified address, tax, and payment fields remain placeholders in these blank templates.</p></details>
         </section>
         <section id="usersView" class="admin-view" aria-labelledby="usersTitle" hidden>
           <div class="page-heading">
@@ -137,6 +140,7 @@
       <section class="detail-section"><h3>Additional requirements</h3><p id="detailRequirements" class="requirements-text"></p></section>
       <section class="detail-section"><h3>Private internal notes</h3><div id="privateNotesList" class="private-notes-list"></div><form id="privateNoteForm" class="private-note-form"><label for="privateNoteInput">Add internal note</label><textarea id="privateNoteInput" maxlength="5000" rows="3" required></textarea><button class="admin-button admin-button-primary" type="submit">Save private note</button></form></section>
       <section class="detail-section"><h3>Follow-up reminder</h3><div class="follow-up-editor"><label>Follow-up date<input id="followUpDate" type="date" /></label><label>Private reminder note<input id="followUpNote" type="text" maxlength="1000" /></label><label class="follow-up-done"><input id="followUpCompleted" type="checkbox" /> Completed</label><button id="saveFollowUp" class="admin-button admin-button-primary" type="button">Save reminder</button></div></section>
+      <div class="quote-invoice-action"><button id="createInvoiceFromQuote" class="admin-button admin-button-primary" type="button">Create invoice from this quote</button></div>
       <form id="statusForm" class="status-editor"><label for="detailStatus">Update request status</label><div><select id="detailStatus"><option value="received">New</option><option value="in_progress">In progress</option><option value="completed">Completed</option><option value="won">Won</option><option value="lost">Lost</option></select><button id="saveStatus" class="admin-button admin-button-primary" type="submit">Save status</button></div></form>
     </div>
   </dialog>
@@ -150,5 +154,19 @@
       <div class="user-edit-actions"><button class="admin-button" id="cancelAdminUserEdit" type="button">Cancel</button><button class="admin-button admin-button-primary" id="saveAdminUserButton" type="submit">Save changes</button></div>
     </form>
   </dialog>
+  <dialog id="invoiceEditorDialog" class="invoice-dialog" aria-labelledby="invoiceEditorTitle">
+    <div class="dialog-heading"><div><span class="page-eyebrow">INVOICE WORKSPACE</span><h2 id="invoiceEditorTitle">Create invoice</h2><p id="invoiceNumberHint">Invoice number will be assigned when saved.</p></div><button id="closeInvoiceEditor" class="dialog-close" type="button" aria-label="Close invoice editor">×</button></div>
+    <form id="invoiceEditorForm" class="invoice-editor-form">
+      <input id="invoiceId" type="hidden" /><input id="invoiceQuoteReference" type="hidden" />
+      <fieldset class="invoice-fields"><legend>Customer and dates</legend><label>Customer name<input id="invoiceCustomerName" maxlength="180" required /></label><label>Customer email<input id="invoiceCustomerEmail" type="email" maxlength="180" /></label><label>Company / facility<input id="invoiceCompanyName" maxlength="180" /></label><label>Billing address<textarea id="invoiceCustomerAddress" rows="2" maxlength="1000"></textarea></label><label>Invoice date<input id="invoiceDate" type="date" required /></label><label>Due date<input id="invoiceDueDate" type="date" required /></label><label>Currency<input id="invoiceCurrency" value="KES" minlength="3" maxlength="3" pattern="[A-Za-z]{3}" required /></label></fieldset>
+      <fieldset class="invoice-items-fieldset"><legend>Items and pricing</legend><div class="catalogue-picker"><label for="invoiceProductSearch">Add from product catalogue</label><input id="invoiceProductSearch" type="search" autocomplete="off" placeholder="Search product name or description" /><div id="invoiceProductResults" class="invoice-product-results" hidden></div><button id="addCustomInvoiceItem" class="admin-button" type="button">Add custom item</button></div><div id="invoiceLineItems" class="invoice-line-items"></div></fieldset>
+      <fieldset class="invoice-fields invoice-adjustments"><legend>Adjustments</legend><label>Discount amount<input id="invoiceDiscount" type="number" min="0" step="0.01" value="0.00" /></label><label>Tax rate (%)<input id="invoiceTaxRate" type="number" min="0" max="100" step="0.01" value="0.00" /></label><p>Only enter a tax rate if it has been verified for this transaction.</p></fieldset>
+      <div id="invoiceTotals" class="invoice-totals" aria-live="polite"></div>
+      <fieldset class="invoice-fields invoice-notes"><legend>Notes and payment instructions</legend><label>Invoice notes<textarea id="invoiceNotes" rows="3" maxlength="5000"></textarea></label><label>Payment instructions<textarea id="invoicePaymentInstructions" rows="3" maxlength="2000" placeholder="[Insert verified payment instructions]"></textarea></label></fieldset>
+      <div class="invoice-editor-actions"><button id="cancelInvoiceEditor" class="admin-button" type="button">Cancel</button><button id="saveInvoice" class="admin-button admin-button-primary" type="submit">Save invoice</button></div>
+    </form>
+  </dialog>
+  <dialog id="invoiceDetailsDialog" class="invoice-dialog invoice-details-dialog" aria-labelledby="invoiceDetailsTitle"><div id="invoiceDetailsContent"></div></dialog>
+  <dialog id="invoicePaymentDialog" class="detail-dialog invoice-payment-dialog" aria-labelledby="invoicePaymentTitle"><div class="dialog-heading"><div><span class="page-eyebrow">PAYMENT RECORD</span><h2 id="invoicePaymentTitle">Mark invoice as paid</h2><p id="invoicePaymentPrompt"></p></div><button id="closeInvoicePayment" class="dialog-close" type="button" aria-label="Close payment dialog">×</button></div><form id="invoicePaymentForm" class="invoice-payment-form"><label>Payment date<input id="invoicePaymentDate" type="date" required /></label><label>Payment reference<input id="invoicePaymentReference" maxlength="180" placeholder="Optional transaction reference" /></label><label>Payment note<textarea id="invoicePaymentNote" rows="3" maxlength="2000" placeholder="Optional payment note"></textarea></label><div class="invoice-editor-actions"><button id="cancelInvoicePayment" class="admin-button" type="button">Cancel</button><button class="admin-button admin-button-primary" type="submit">Confirm payment received</button></div></form></dialog>
 </body>
 </html>

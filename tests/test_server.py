@@ -10,6 +10,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -37,6 +38,86 @@ class FakeConnection:
 
     def fetchall(self):
         return self.fetchall_result
+
+
+class FakeInvoiceConnection:
+    """Small transactional PostgreSQL stand-in for exercising invoice services."""
+    def __init__(self):
+        self.statements = []
+        self.quotes = {'ALIPEN-ABC123'}
+        self.invoices = {}
+        self.items = {}
+        self.next_id = 1
+        self.next_item_id = 1
+        self.sequence = 0
+        self.result_one = None
+        self.result_all = []
+
+    def __enter__(self): return self
+    def __exit__(self, exc_type, exc, traceback): return False
+
+    def execute(self, query, params=None):
+        params = tuple(params or ())
+        sql = ' '.join(query.split())
+        upper = sql.upper()
+        self.statements.append((sql, params))
+        self.result_one, self.result_all = None, []
+        if upper.startswith('SELECT REFERENCE FROM QUOTE_REQUESTS'):
+            self.result_one = (params[0],) if params[0] in self.quotes else None
+        elif 'NEXTVAL(' in upper:
+            self.sequence += 1
+            self.result_one = (self.sequence,)
+        elif upper.startswith('INSERT INTO INVOICES'):
+            number = params[0]
+            names = ('quote_reference', 'customer_name', 'customer_email', 'company_name', 'customer_address',
+                     'invoice_date', 'due_date', 'currency', 'subtotal', 'discount_amount', 'tax_rate',
+                     'tax_amount', 'total', 'notes', 'payment_instructions')
+            invoice = dict(zip(names, params[1:16]))
+            invoice.update(id=self.next_id, invoice_number=number, status='new', amount_paid=Decimal('0.00'),
+                           payment_date=None, payment_reference='', payment_note='', created_by=params[16],
+                           created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc), pdf_content=b'')
+            self.next_id += 1
+            self.invoices[invoice['id']] = invoice
+            self.result_one = tuple(invoice.get(column) for column in server.INVOICE_COLUMNS)
+        elif upper.startswith('INSERT INTO INVOICE_ITEMS'):
+            invoice_id, position, slug, name, description, quantity, price, total = params
+            self.items.setdefault(invoice_id, []).append({
+                'id': self.next_item_id, 'product_slug': slug, 'name': name,
+                'description': description, 'quantity': quantity,
+                'unit_price': price, 'line_total': total, 'position': position,
+            })
+            self.next_item_id += 1
+        elif upper.startswith('UPDATE INVOICES SET PDF_CONTENT'):
+            self.invoices[params[1]]['pdf_content'] = params[0]
+        elif upper.startswith('SELECT PDF_CONTENT FROM INVOICES'):
+            self.result_one = (self.invoices[params[0]]['pdf_content'],) if params[0] in self.invoices else None
+        elif upper.startswith('SELECT') and 'FROM INVOICE_ITEMS' in upper:
+            self.result_all = [tuple(item.get(col) for col in server.INVOICE_ITEM_COLUMNS)
+                               for item in self.items.get(params[0], [])]
+        elif upper.startswith('SELECT') and 'FROM INVOICES' in upper:
+            invoice_id = params[0]
+            invoice = self.invoices.get(invoice_id)
+            self.result_one = tuple(invoice.get(col) for col in server.INVOICE_COLUMNS) if invoice else None
+        elif upper.startswith('UPDATE INVOICES SET STATUS'):
+            paid_date, reference, note, invoice_id = params
+            invoice = self.invoices[invoice_id]
+            invoice.update(status='paid', amount_paid=invoice['total'], payment_date=paid_date,
+                           payment_reference=reference, payment_note=note, updated_at=datetime.now(timezone.utc))
+            self.result_one = tuple(invoice.get(col) for col in server.INVOICE_COLUMNS)
+        elif upper.startswith('UPDATE INVOICES SET CUSTOMER_NAME'):
+            fields = ('customer_name', 'customer_email', 'company_name', 'customer_address', 'invoice_date',
+                      'due_date', 'currency', 'subtotal', 'discount_amount', 'tax_rate', 'tax_amount', 'total',
+                      'notes', 'payment_instructions')
+            invoice = self.invoices[params[-1]]
+            invoice.update(dict(zip(fields, params[:-1])))
+            invoice['updated_at'] = datetime.now(timezone.utc)
+            self.result_one = tuple(invoice.get(col) for col in server.INVOICE_COLUMNS)
+        elif upper.startswith('DELETE FROM INVOICE_ITEMS'):
+            self.items[params[0]] = []
+        return self
+
+    def fetchone(self): return self.result_one
+    def fetchall(self): return self.result_all
 
 
 class ServerTests(unittest.TestCase):
@@ -323,6 +404,165 @@ class ServerTests(unittest.TestCase):
             self.assertIn('attachment', response_headers.get('Content-Disposition'))
             self.assertTrue(downloaded)
 
+    @staticmethod
+    def invoice_payload(**updates):
+        payload = {
+            'customer_name': 'Invoice Buyer', 'customer_email': 'buyer@example.com',
+            'company_name': 'Buyer Clinic', 'customer_address': 'Nairobi, Kenya',
+            'invoice_date': '2026-11-24', 'due_date': '2026-12-24', 'currency': 'KES',
+            'discount_amount': '500.00', 'tax_rate': '16.00', 'notes': 'Deliver to reception',
+            'payment_instructions': '[Insert verified payment instructions]',
+            'items': [
+                {'product_slug': 'patient-monitor', 'name': 'Patient Monitor', 'description': 'Catalogue snapshot', 'quantity': '5', 'unit_price': '2000.00'},
+                {'product_slug': None, 'name': 'Installation', 'description': 'Custom service', 'quantity': '3', 'unit_price': '1500.00'},
+            ],
+        }
+        payload.update(updates)
+        return payload
+
+    def test_invoice_totals_are_decimal_safe_and_catalogue_items_are_validated(self):
+        invoice = server.validate_invoice_payload(self.invoice_payload())
+        self.assertEqual(invoice['items'][0]['line_total'], Decimal('10000.00'))
+        self.assertEqual(invoice['items'][1]['line_total'], Decimal('4500.00'))
+        self.assertEqual(invoice['subtotal'], Decimal('14500.00'))
+        self.assertEqual(invoice['discount_amount'], Decimal('500.00'))
+        self.assertEqual(invoice['tax_amount'], Decimal('2240.00'))
+        self.assertEqual(invoice['total'], Decimal('16240.00'))
+        self.assertEqual(invoice['items'][0]['product_slug'], 'patient-monitor')
+        with self.assertRaises(server.InvoiceValidationError):
+            server.validate_invoice_payload(self.invoice_payload(items=[{'name': 'Bad quantity', 'quantity': '0', 'unit_price': '1'}]))
+        with self.assertRaises(server.InvoiceValidationError):
+            server.validate_invoice_payload(self.invoice_payload(items=[{'name': 'Bad money', 'quantity': 1, 'unit_price': 'NaN'}]))
+        with self.assertRaises(server.InvoiceValidationError):
+            server.validate_invoice_payload(self.invoice_payload(items=[{'product_slug': 'not-a-catalogue-item', 'name': 'Unknown product', 'quantity': 1, 'unit_price': 1}]))
+
+    def test_invoice_create_sequence_edit_payment_and_paid_financial_lock(self):
+        connection = FakeInvoiceConnection()
+        with patch.object(server, 'database_connection', return_value=connection):
+            quote_invoice = server.create_invoice(self.invoice_payload(quote_reference='ALIPEN-ABC123'), 'unit-admin')
+            standalone = server.create_invoice(self.invoice_payload(quote_reference=None), 'unit-admin')
+            self.assertNotEqual(quote_invoice['invoice_number'], standalone['invoice_number'])
+            self.assertEqual(quote_invoice['quote_reference'], 'ALIPEN-ABC123')
+            self.assertIsNone(standalone['quote_reference'])
+            self.assertEqual(quote_invoice['items'][0]['quantity'], '5.000')
+            self.assertEqual(quote_invoice['items'][0]['description'], 'Catalogue snapshot')
+            invoice_id = quote_invoice['id']
+            stable_number = quote_invoice['invoice_number']
+
+            edit = self.invoice_payload(quote_reference='ALIPEN-ABC123', customer_name='Corrected Buyer')
+            updated = server.update_invoice(invoice_id, edit)
+            self.assertEqual(updated['id'], invoice_id)
+            self.assertEqual(updated['invoice_number'], stable_number)
+            self.assertEqual(updated['customer_name'], 'Corrected Buyer')
+            self.assertEqual(len(connection.invoices), 2)
+
+            paid = server.mark_invoice_paid(invoice_id, 'BANK-REF-19', 'Paid in full', '2026-11-25')
+            self.assertEqual(paid['status'], 'paid')
+            self.assertEqual(paid['amount_paid'], paid['total'])
+            self.assertEqual(paid['payment_date'], '2026-11-25')
+            self.assertEqual(paid['payment_reference'], 'BANK-REF-19')
+            self.assertEqual(paid['payment_note'], 'Paid in full')
+            saved_pdf = connection.invoices[invoice_id]['pdf_content']
+            self.assertTrue(saved_pdf.startswith(b'%PDF-1.4'))
+
+            metadata_edit = self.invoice_payload(quote_reference='ALIPEN-ABC123', customer_name='Buyer Name Correction')
+            metadata_edit['items'] = [dict(item) for item in metadata_edit['items']]
+            metadata_edit['items'][0]['unit_price'] = '2000.00'
+            metadata_edit['items'][1]['unit_price'] = '1500.00'
+            paid_updated = server.update_invoice(invoice_id, metadata_edit)
+            self.assertEqual(paid_updated['invoice_number'], stable_number)
+            self.assertEqual(paid_updated['customer_name'], 'Buyer Name Correction')
+            self.assertEqual(paid_updated['payment_reference'], 'BANK-REF-19')
+            self.assertEqual(len(connection.invoices), 2)
+
+            changed_finances = self.invoice_payload(quote_reference='ALIPEN-ABC123')
+            changed_finances['items'][0]['unit_price'] = '1999.00'
+            with self.assertRaises(server.InvoicePaidFinancialChange):
+                server.update_invoice(invoice_id, changed_finances)
+            with self.assertRaises(server.InvoiceAlreadyPaid):
+                server.mark_invoice_paid(invoice_id, 'OVERWRITE', 'should not replace original')
+            fetched, pdf_content = server.get_invoice(invoice_id, include_pdf=True)
+            self.assertEqual(fetched['payment_reference'], 'BANK-REF-19')
+            self.assertEqual(fetched['items'][0]['description'], 'Catalogue snapshot')
+            self.assertEqual(pdf_content, connection.invoices[invoice_id]['pdf_content'])
+
+    def test_invoice_pdf_is_valid_branded_multipage_and_uses_stored_snapshot(self):
+        from invoice_documents import invoice_pdf
+        invoice = {
+            'invoice_number': 'ALP-2026-000019', 'invoice_date': '2026-11-24', 'due_date': '2026-12-24',
+            'customer_name': 'Buyer Clinic', 'customer_email': 'buyer@example.com', 'company_name': 'Buyer Ltd',
+            'customer_address': 'Nairobi', 'quote_reference': 'ALIPEN-ABC123', 'currency': 'KES',
+            'subtotal': '100.00', 'discount_amount': '0.00', 'tax_rate': '0.00', 'tax_amount': '0.00',
+            'total': '100.00', 'amount_paid': '0.00', 'status': 'new',
+            'payment_instructions': '[Insert verified payment instructions]', 'notes': 'Stored invoice note',
+            'items': [{'name': f'Snapshot item {index}', 'description': 'Saved description unchanged', 'quantity': '1.000', 'unit_price': '10.00', 'line_total': '10.00'} for index in range(30)],
+        }
+        pdf = invoice_pdf(invoice)
+        self.assertTrue(pdf.startswith(b'%PDF-1.4'))
+        self.assertTrue(pdf.endswith(b'%%EOF'))
+        self.assertIn(b'ALIPEN SOLUTIONS AGENCY LTD', pdf)
+        self.assertIn(b'Snapshot item 0', pdf)
+        self.assertIn(b'Stored invoice note', pdf)
+        self.assertIn(b'[Insert verified payment instructions]', pdf)
+        self.assertGreaterEqual(pdf.count(b'/Type /Page '), 3)
+        xref_offset = int(pdf.rsplit(b'startxref\n', 1)[1].splitlines()[0])
+        self.assertEqual(pdf[xref_offset:xref_offset + 4], b'xref')
+        xref_lines = pdf[xref_offset:].splitlines()
+        object_count = int(xref_lines[1].split()[1])
+        for number, entry in enumerate(xref_lines[3:3 + object_count - 1], start=1):
+            if entry.endswith(b' n '):
+                offset = int(entry[:10])
+                self.assertTrue(pdf[offset:].startswith(f'{number} 0 obj'.encode('ascii')))
+
+    def test_invoice_endpoints_require_auth_csrf_and_protect_pdf(self):
+        connection = FakeInvoiceConnection()
+        db_patch = patch.object(server, 'database_connection', return_value=connection)
+        db_patch.start()
+        self.addCleanup(db_patch.stop)
+        status, _, _ = self.request('GET', '/api/admin/invoices')
+        self.assertEqual(status, 401)
+        status, _, _ = self.request('GET', '/api/admin/invoices/1/pdf')
+        self.assertEqual(status, 401)
+        status, _, _ = self.request('POST', '/api/admin/invoices', self.invoice_payload())
+        self.assertEqual(status, 401)
+
+        status, body, headers = self.admin_login()
+        cookie = headers.get('Set-Cookie').split(';', 1)[0]
+        csrf = json.loads(body)['csrfToken']
+        auth = {'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf}
+        status, _, _ = self.request('POST', '/api/admin/invoices', self.invoice_payload(), {'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}'})
+        self.assertEqual(status, 403)
+        invalid = self.invoice_payload(customer_email='invalid address')
+        status, _, _ = self.request('POST', '/api/admin/invoices', invalid, auth)
+        self.assertEqual(status, 422)
+
+        status, body, _ = self.request('POST', '/api/admin/invoices', self.invoice_payload(quote_reference='ALIPEN-ABC123'), auth)
+        self.assertEqual(status, 201)
+        invoice = json.loads(body)['invoice']
+        invoice_id = invoice['id']
+        status, body, _ = self.request('GET', f'/api/admin/invoices/{invoice_id}', headers={'Cookie': cookie})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['invoice']['items'][0]['quantity'], '5.000')
+        status, pdf, response_headers = self.request('GET', f'/api/admin/invoices/{invoice_id}/pdf', headers={'Cookie': cookie})
+        self.assertEqual(status, 200)
+        self.assertEqual(response_headers.get('Content-Type'), 'application/pdf')
+        self.assertIn('attachment', response_headers.get('Content-Disposition'))
+        self.assertTrue(pdf.startswith(b'%PDF-1.4'))
+
+        status, _, _ = self.request('PATCH', f'/api/admin/invoices/{invoice_id}', self.invoice_payload(), {'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}'})
+        self.assertEqual(status, 403)
+        status, body, _ = self.request('POST', f'/api/admin/invoices/{invoice_id}/paid', {
+            'payment_date': '2026-11-25', 'payment_reference': 'BANK-REF-42', 'payment_note': 'Received',
+        }, auth)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['invoice']['payment_reference'], 'BANK-REF-42')
+        with patch.object(server, 'list_invoices', return_value={'items': [], 'total': 0, 'page': 1, 'pageSize': 20}) as listing:
+            status, _, _ = self.request('GET', '/api/admin/invoices?status=paid&search=Buyer&page=1', headers={'Cookie': cookie})
+        self.assertEqual(status, 200)
+        listing.assert_called_once_with(search='Buyer', status='paid', page=1)
+        status, _, _ = self.request('POST', f'/api/admin/invoices/{invoice_id}/paid', {}, auth)
+        self.assertEqual(status, 409)
+
     def test_secondary_admin_authenticates_but_cannot_manage_other_accounts(self):
         from argon2 import PasswordHasher
         password = 'Additional-Admin-Password-2026'
@@ -489,6 +729,11 @@ class ServerTests(unittest.TestCase):
         self.assertIn('ADD COLUMN IF NOT EXISTS follow_up_date', migration_sql)
         self.assertIn('CREATE TABLE IF NOT EXISTS quote_notes', migration_sql)
         self.assertIn('quote_requests_follow_up_idx', migration_sql)
+        self.assertIn('CREATE SEQUENCE IF NOT EXISTS alipen_invoice_number_seq', migration_sql)
+        self.assertIn('CREATE TABLE IF NOT EXISTS invoices', migration_sql)
+        self.assertIn('CREATE TABLE IF NOT EXISTS invoice_items', migration_sql)
+        self.assertIn('NUMERIC(14, 2)', migration_sql)
+        self.assertIn('CREATE INDEX IF NOT EXISTS invoice_items_invoice_position_idx', migration_sql)
 
     def test_admin_user_database_helpers_return_only_safe_fields(self):
         created_at = datetime.now(timezone.utc)

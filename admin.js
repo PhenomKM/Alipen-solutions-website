@@ -3,7 +3,9 @@
   const state = {
     csrfToken: '', page: 1, pageSize: 20, total: 0, search: '', status: 'all', dateFrom: '', dateTo: '', followUp: 'all', currentReference: '', isPrimary: false, username: '',
     quoteDialogScrollY: 0, quoteDialogOriginalStyle: null, quoteDialogOriginalStyleCaptured: false,
-    quoteDialogViewport: null, quoteDialogViewportSync: null
+    quoteDialogViewport: null, quoteDialogViewportSync: null,
+    currentQuote: null, invoiceStatus: 'new', invoicePage: 1, invoicePageSize: 20,
+    invoiceTotal: 0, invoiceSearch: '', invoiceSearchTimer: null, invoiceProducts: [], invoiceEditing: null
   };
   const byId = (id) => document.getElementById(id);
 
@@ -297,6 +299,346 @@
     });
   }
 
+  function invoiceCents(value) {
+    const match = String(value ?? '0').trim().match(/^(\d+)(?:\.(\d{1,2}))?$/);
+    if (!match) return 0n;
+    return BigInt(match[1]) * 100n + BigInt((match[2] || '').padEnd(2, '0'));
+  }
+
+  function invoiceMoneyCents(cents, currency = 'KES') {
+    const safeCents = cents < 0n ? 0n : cents;
+    const whole = safeCents / 100n;
+    const fraction = String(safeCents % 100n).padStart(2, '0');
+    return `${currency} ${whole.toLocaleString()}${fraction === '00' ? '.00' : `.${fraction}`}`;
+  }
+
+  function invoiceMoney(value, currency = 'KES') {
+    return invoiceMoneyCents(invoiceCents(value), currency);
+  }
+
+  function invoiceDateLabel(value) {
+    if (!value) return '—';
+    const date = new Date(`${value.slice(0, 10)}T12:00:00`);
+    return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'Africa/Nairobi' }).format(date);
+  }
+
+  function selectInvoiceStatus(status) {
+    state.invoiceStatus = status;
+    document.querySelectorAll('[data-invoice-status]').forEach((tab) => {
+      const active = tab.dataset.invoiceStatus === status;
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', String(active));
+    });
+  }
+
+  async function loadInvoices() {
+    const query = new URLSearchParams({ status: state.invoiceStatus, search: state.invoiceSearch, page: String(state.invoicePage) });
+    const data = await api(`/invoices?${query}`);
+    state.invoiceTotal = data.total;
+    const maxPage = Math.max(1, Math.ceil(data.total / state.invoicePageSize));
+    if (state.invoicePage > maxPage) {
+      state.invoicePage = maxPage;
+      return loadInvoices();
+    }
+    const rows = byId('invoiceRows');
+    if (!rows) throw new Error('Invoice list markup is unavailable.');
+    rows.replaceChildren();
+    (data.items || []).forEach((invoice) => {
+      const row = document.createElement('tr');
+      const numberCell = document.createElement('td');
+      const view = makeElement('button', 'reference-link', invoice.invoice_number);
+      view.type = 'button';
+      view.dataset.invoiceAction = 'view';
+      view.dataset.invoiceId = invoice.id;
+      numberCell.append(view);
+      row.append(numberCell);
+      const customer = makeElement('td', 'customer-cell');
+      customer.append(makeElement('strong', '', invoice.customer_name));
+      customer.append(makeElement('span', '', invoice.company_name || invoice.customer_email || ''));
+      row.append(customer);
+      row.append(makeElement('td', '', invoiceDateLabel(invoice.invoice_date)));
+      row.append(makeElement('td', '', invoiceDateLabel(invoice.due_date)));
+      row.append(makeElement('td', '', invoiceMoney(invoice.total, invoice.currency)));
+      const statusCell = document.createElement('td');
+      statusCell.append(makeElement('span', `invoice-status-badge ${invoice.status}`, invoice.status === 'paid' ? 'Paid' : 'Unpaid'));
+      row.append(statusCell);
+      const actions = makeElement('td', 'invoice-row-actions');
+      const actionButton = (label, action) => {
+        const button = makeElement('button', 'text-button', label);
+        button.type = 'button';
+        button.dataset.invoiceAction = action;
+        button.dataset.invoiceId = invoice.id;
+        actions.append(button);
+      };
+      actionButton('View', 'view');
+      actionButton('Edit', 'edit');
+      const download = makeElement('a', 'text-button', 'PDF');
+      download.href = `/api/admin/invoices/${encodeURIComponent(invoice.id)}/pdf`;
+      download.setAttribute('download', `${invoice.invoice_number}.pdf`);
+      actions.append(download);
+      if (invoice.status === 'new') actionButton('Mark paid', 'paid');
+      row.append(actions);
+      rows.append(row);
+    });
+    const empty = byId('invoicesEmpty');
+    if (empty) empty.hidden = (data.items || []).length > 0;
+    const first = data.total ? ((state.invoicePage - 1) * state.invoicePageSize) + 1 : 0;
+    const last = Math.min(state.invoicePage * state.invoicePageSize, data.total);
+    setText('invoicePageSummary', `Showing ${first}–${last} of ${data.total} invoices`);
+    const previous = byId('invoicePreviousPage');
+    const next = byId('invoiceNextPage');
+    if (previous) previous.disabled = state.invoicePage <= 1;
+    if (next) next.disabled = last >= data.total;
+  }
+
+  function setInvoiceProducts() {
+    try {
+      state.invoiceProducts = typeof window.getAllProducts === 'function' ? window.getAllProducts() : [];
+    } catch (error) {
+      console.error('[Alipen admin] Product catalogue could not be read for invoices.', error);
+      state.invoiceProducts = [];
+    }
+  }
+
+  function invoiceLineElement(item = {}) {
+    const row = makeElement('div', 'invoice-line-item');
+    row.dataset.productSlug = item.product_slug || '';
+    const field = (label, name, value, type = 'text', attrs = {}) => {
+      const wrap = makeElement('label', '', label);
+      const input = document.createElement(type === 'textarea' ? 'textarea' : 'input');
+      if (type !== 'textarea') input.type = type;
+      input.dataset.field = name;
+      if (value !== undefined && value !== null) input.value = value;
+      Object.entries(attrs).forEach(([key, val]) => input.setAttribute(key, String(val)));
+      wrap.append(input);
+      row.append(wrap);
+      return input;
+    };
+    field('Item name', 'name', item.name || '', 'text', { maxlength: 240, required: true });
+    field('Description', 'description', item.description || '', 'textarea', { maxlength: 1000, rows: 2 });
+    field('Quantity', 'quantity', item.quantity || '1', 'number', { min: '0.001', step: '0.001', required: true });
+    field('Unit price', 'unit_price', item.unit_price ?? '', 'number', { min: '0', step: '0.01', required: true });
+    const total = makeElement('div', 'invoice-line-total', 'KES 0.00');
+    total.dataset.lineTotal = 'true';
+    row.append(total);
+    const remove = makeElement('button', 'invoice-remove-item', 'Remove');
+    remove.type = 'button';
+    remove.dataset.removeInvoiceItem = 'true';
+    row.append(remove);
+    if (state.invoiceEditing?.status === 'paid') {
+      row.querySelectorAll('input, textarea, button').forEach((control) => { control.disabled = true; });
+    }
+    return row;
+  }
+
+  function calculateInvoiceTotals() {
+    const itemsHost = byId('invoiceLineItems');
+    const currency = byId('invoiceCurrency')?.value.toUpperCase() || 'KES';
+    const cents = (value) => {
+      const text = String(value || '0').trim();
+      if (!/^\d{1,12}(?:\.\d{0,2})?$/.test(text)) return 0n;
+      const [whole, fraction = ''] = text.split('.');
+      return BigInt(whole) * 100n + BigInt((fraction + '00').slice(0, 2));
+    };
+    const milli = (value) => {
+      const text = String(value || '0').trim();
+      if (!/^\d{1,6}(?:\.\d{0,3})?$/.test(text)) return 0n;
+      const [whole, fraction = ''] = text.split('.');
+      return BigInt(whole) * 1000n + BigInt((fraction + '000').slice(0, 3));
+    };
+    const format = (amount) => invoiceMoneyCents(amount, currency);
+    let subtotal = 0n;
+    itemsHost?.querySelectorAll('.invoice-line-item').forEach((row) => {
+      const quantity = milli(row.querySelector('[data-field="quantity"]')?.value);
+      const unitPrice = cents(row.querySelector('[data-field="unit_price"]')?.value);
+      const total = (quantity * unitPrice + 500n) / 1000n;
+      subtotal += total;
+      const totalNode = row.querySelector('[data-line-total]');
+      if (totalNode) totalNode.textContent = format(total);
+    });
+    const discount = cents(byId('invoiceDiscount')?.value);
+    const rate = cents(byId('invoiceTaxRate')?.value);
+    const taxable = subtotal > discount ? subtotal - discount : 0n;
+    const tax = (taxable * rate + 5000n) / 10000n;
+    const total = taxable + tax;
+    const summary = byId('invoiceTotals');
+    if (!summary) return;
+    summary.replaceChildren();
+    [['Subtotal', subtotal], ['Discount', discount], [`Tax (${byId('invoiceTaxRate')?.value || '0'}%)`, tax], ['Grand total', total]].forEach(([label, amount], index) => {
+      const line = makeElement('div', `invoice-total-row${index === 3 ? ' grand' : ''}`);
+      line.append(makeElement('span', '', label), makeElement('strong', '', format(amount)));
+      summary.append(line);
+    });
+  }
+
+  function addInvoiceItem(item = {}) {
+    const host = byId('invoiceLineItems');
+    if (!host || host.children.length >= 100) {
+      showNotice('An invoice can contain up to 100 items.', true);
+      return;
+    }
+    host.append(invoiceLineElement(item));
+    calculateInvoiceTotals();
+  }
+
+  function invoiceFormPayload() {
+    return {
+      quote_reference: byId('invoiceQuoteReference').value || null,
+      customer_name: byId('invoiceCustomerName').value,
+      customer_email: byId('invoiceCustomerEmail').value,
+      company_name: byId('invoiceCompanyName').value,
+      customer_address: byId('invoiceCustomerAddress').value,
+      invoice_date: byId('invoiceDate').value,
+      due_date: byId('invoiceDueDate').value,
+      currency: byId('invoiceCurrency').value,
+      discount_amount: byId('invoiceDiscount').value || '0',
+      tax_rate: byId('invoiceTaxRate').value || '0',
+      notes: byId('invoiceNotes').value,
+      payment_instructions: byId('invoicePaymentInstructions').value,
+      items: [...byId('invoiceLineItems').querySelectorAll('.invoice-line-item')].map((row) => ({
+        product_slug: row.dataset.productSlug || null,
+        name: row.querySelector('[data-field="name"]').value,
+        description: row.querySelector('[data-field="description"]').value,
+        quantity: row.querySelector('[data-field="quantity"]').value,
+        unit_price: row.querySelector('[data-field="unit_price"]').value,
+      })),
+    };
+  }
+
+  function openInvoiceEditor(invoice = null, quote = null) {
+    state.invoiceEditing = invoice;
+    const form = byId('invoiceEditorForm');
+    if (!form) return;
+    form.reset();
+    byId('invoiceLineItems').replaceChildren();
+    byId('invoiceId').value = invoice?.id || '';
+    byId('invoiceQuoteReference').value = invoice?.quote_reference || quote?.reference || '';
+    setText('invoiceEditorTitle', invoice ? `Edit ${invoice.invoice_number}` : 'Create invoice');
+    setText('invoiceNumberHint', invoice ? `Invoice number: ${invoice.invoice_number}${invoice.status === 'paid' ? ' · paid financial details are locked' : ''}` : 'Invoice number will be assigned when saved.');
+    byId('invoiceCustomerName').value = invoice?.customer_name || quote?.name || '';
+    byId('invoiceCustomerEmail').value = invoice?.customer_email || quote?.email || '';
+    byId('invoiceCompanyName').value = invoice?.company_name || quote?.facility || '';
+    byId('invoiceCustomerAddress').value = invoice?.customer_address || '';
+    byId('invoiceDate').value = invoice?.invoice_date || nairobiToday();
+    byId('invoiceDueDate').value = invoice?.due_date || nairobiToday();
+    byId('invoiceCurrency').value = invoice?.currency || 'KES';
+    byId('invoiceDiscount').value = invoice?.discount_amount || '0.00';
+    byId('invoiceTaxRate').value = invoice?.tax_rate || '0.00';
+    byId('invoiceNotes').value = invoice?.notes || '';
+    byId('invoicePaymentInstructions').value = invoice?.payment_instructions || '[Insert verified payment instructions]';
+    (invoice?.items || quote?.items || []).forEach((item) => addInvoiceItem({
+      product_slug: item.product_slug || item.slug || '',
+      name: item.name || item.shortName || '',
+      description: item.description || '',
+      quantity: item.quantity || 1,
+      unit_price: item.unit_price ?? item.unitPrice ?? '',
+    }));
+    const paid = invoice?.status === 'paid';
+    ['invoiceCurrency', 'invoiceDiscount', 'invoiceTaxRate'].forEach((id) => { byId(id).disabled = paid; });
+    byId('addCustomInvoiceItem').disabled = paid;
+    byId('invoiceProductSearch').disabled = paid;
+    byId('saveInvoice').textContent = invoice ? 'Save changes' : 'Save invoice';
+    calculateInvoiceTotals();
+    const dialog = byId('invoiceEditorDialog');
+    if (!dialog.open) dialog.showModal();
+  }
+
+  function renderInvoiceDetails(invoice) {
+    const host = byId('invoiceDetailsContent');
+    if (!host) return;
+    host.replaceChildren();
+    const heading = makeElement('div', 'dialog-heading');
+    const title = document.createElement('div');
+    title.append(makeElement('span', 'page-eyebrow', invoice.status === 'paid' ? 'PAID INVOICE' : 'NEW INVOICE'));
+    const detailsTitle = makeElement('h2', '', 'Invoice details');
+    detailsTitle.id = 'invoiceDetailsTitle';
+    title.append(detailsTitle);
+    heading.append(title);
+    const close = makeElement('button', 'dialog-close', '×');
+    close.type = 'button'; close.setAttribute('aria-label', 'Close invoice details');
+    close.addEventListener('click', () => byId('invoiceDetailsDialog').close());
+    heading.append(close);
+    host.append(heading);
+    const banner = makeElement('div', 'invoice-detail-header');
+    banner.append(makeElement('span', '', 'ALIPEN SOLUTIONS AGENCY LTD'));
+    banner.append(makeElement('strong', '', invoice.invoice_number));
+    banner.append(makeElement('span', '', invoice.status === 'paid' ? 'PAID' : 'PAYMENT DUE'));
+    host.append(banner);
+    const meta = makeElement('div', 'invoice-detail-meta');
+    [['Bill to', [invoice.customer_name, invoice.company_name, invoice.customer_email, invoice.customer_address].filter(Boolean).join(' · ')], ['Invoice date', invoiceDateLabel(invoice.invoice_date)], ['Due date', invoiceDateLabel(invoice.due_date)], ['Quote reference', invoice.quote_reference || 'Standalone invoice'], ['Payment instructions', invoice.payment_instructions || '[Insert verified payment instructions]'], ['Notes', invoice.notes || '—']].forEach(([label, value]) => {
+      const block = document.createElement('div'); block.append(makeElement('span', '', label), makeElement('strong', '', value)); meta.append(block);
+    });
+    host.append(meta);
+    const content = makeElement('div', 'invoice-details-content');
+    const tableWrap = makeElement('div', 'table-scroll');
+    const table = makeElement('table', 'admin-table');
+    const thead = document.createElement('thead'); const headerRow = document.createElement('tr');
+    ['Item', 'Description', 'Qty', 'Unit price', 'Line total'].forEach((label) => headerRow.append(makeElement('th', '', label)));
+    thead.append(headerRow); table.append(thead);
+    const tbody = document.createElement('tbody');
+    (invoice.items || []).forEach((item) => {
+      const row = document.createElement('tr');
+      [item.name, item.description || '—', item.quantity, invoiceMoney(item.unit_price, invoice.currency), invoiceMoney(item.line_total, invoice.currency)].forEach((value) => row.append(makeElement('td', '', value)));
+      tbody.append(row);
+    });
+    table.append(tbody); tableWrap.append(table); content.append(tableWrap);
+    const totals = makeElement('div', 'invoice-details-total');
+    const balanceCents = invoiceCents(invoice.total) - invoiceCents(invoice.amount_paid);
+    [
+      ['Subtotal', invoiceMoney(invoice.subtotal, invoice.currency)],
+      ['Discount', `− ${invoiceMoney(invoice.discount_amount, invoice.currency)}`],
+      [`Tax (${invoice.tax_rate}%)`, invoiceMoney(invoice.tax_amount, invoice.currency)],
+      ['Total', invoiceMoney(invoice.total, invoice.currency)],
+      ['Amount paid', invoiceMoney(invoice.amount_paid, invoice.currency)],
+      ['Balance due', invoiceMoneyCents(balanceCents, invoice.currency)],
+    ].forEach(([label, value]) => {
+      const line = document.createElement('p'); line.append(makeElement('span', '', label), makeElement('strong', '', value)); totals.append(line);
+    });
+    content.append(totals);
+    if (invoice.status === 'paid') {
+      const payment = makeElement('p', 'invoice-payment-meta', `Paid ${invoiceDateLabel(invoice.payment_date)}${invoice.payment_reference ? ` · Reference: ${invoice.payment_reference}` : ''}${invoice.payment_note ? ` · ${invoice.payment_note}` : ''}`);
+      content.append(payment);
+    }
+    host.append(content);
+    const actions = makeElement('div', 'invoice-details-actions');
+    const button = (label, handler, primary = false) => { const item = makeElement('button', `admin-button${primary ? ' admin-button-primary' : ''}`, label); item.type = 'button'; item.addEventListener('click', handler); actions.append(item); };
+    button('Download PDF', () => { window.location.assign(`/api/admin/invoices/${encodeURIComponent(invoice.id)}/pdf`); });
+    button('Edit invoice', () => { byId('invoiceDetailsDialog').close(); openInvoiceEditor(invoice); });
+    if (invoice.status === 'new') button('Mark as paid', () => { byId('invoiceDetailsDialog').close(); openInvoicePayment(invoice); }, true);
+    host.append(actions);
+    const dialog = byId('invoiceDetailsDialog');
+    if (!dialog.open) dialog.showModal();
+  }
+
+  async function openInvoice(id, mode = 'view') {
+    try {
+      const data = await api(`/invoices/${encodeURIComponent(id)}`);
+      if (!data.invoice) throw new Error('Invoice details were not returned.');
+      if (mode === 'edit') openInvoiceEditor(data.invoice);
+      else if (mode === 'paid') openInvoicePayment(data.invoice);
+      else renderInvoiceDetails(data.invoice);
+    } catch (error) {
+      console.error('[Alipen admin] Invoice could not be opened.', error);
+      showNotice(error.message, true);
+    }
+  }
+
+  function openInvoicePayment(invoice) {
+    state.invoiceEditing = invoice;
+    setText('invoicePaymentPrompt', `${invoice.invoice_number} · ${invoiceMoney(invoice.total, invoice.currency)}. Confirm the full amount was received.`);
+    byId('invoicePaymentDate').value = nairobiToday();
+    byId('invoicePaymentReference').value = '';
+    byId('invoicePaymentNote').value = '';
+    byId('invoicePaymentDialog').showModal();
+  }
+
+  function handleInvoiceListAction(event) {
+    const button = event.target.closest('[data-invoice-action]');
+    if (!button) return;
+    const id = button.dataset.invoiceId;
+    openInvoice(id, button.dataset.invoiceAction);
+  }
+
   async function loadPrivateNotes(reference) {
     const data = await api(`/quotes/${encodeURIComponent(reference)}/notes`);
     const host = byId('privateNotesList');
@@ -413,6 +755,7 @@
     if (overview) loadOverview().catch((error) => showNotice(error.message, true));
     else if (name === 'quotes') loadQuotes().catch((error) => showNotice(error.message, true));
     else if (name === 'users') loadAdminUsers().catch((error) => showNotice(error.message, true));
+    else if (name === 'documents') loadInvoices().catch((error) => showNotice(error.message, true));
   }
 
   async function openQuote(reference) {
@@ -434,6 +777,7 @@
       prepareQuoteDialogViewport(dialog);
       dialog.showModal();
       const quote = await api(`/quotes/${encodeURIComponent(reference)}`);
+      state.currentQuote = quote;
       setText('detailReference', quote.reference);
       byId('detailStatusBadge').replaceChildren(makeElement('span', `status-pill ${statusClass(quote.status)}`, displayStatus(quote.status)));
       setText('detailName', quote.name || '—');
@@ -576,6 +920,12 @@
       if (state.page * state.pageSize < state.total) { state.page += 1; loadQuotes().catch((error) => showNotice(error.message, true)); }
     });
     bind('closeDetail', 'click', () => byId('quoteDetailDialog')?.close());
+    bind('createInvoiceFromQuote', 'click', () => {
+      if (!state.currentQuote) { showNotice('Open a quote before creating an invoice from it.', true); return; }
+      byId('quoteDetailDialog')?.close();
+      showView('documents');
+      openInvoiceEditor(null, state.currentQuote);
+    });
     const quoteDialog = byId('quoteDetailDialog');
     if (quoteDialog) {
       quoteDialog.addEventListener('click', (event) => {
@@ -691,6 +1041,115 @@
       }
       state.csrfToken = '';
       window.location.assign('/admin/login');
+    });
+
+    setInvoiceProducts();
+    document.querySelectorAll('[data-invoice-status]').forEach((button) => button.addEventListener('click', () => {
+      selectInvoiceStatus(button.dataset.invoiceStatus);
+      state.invoicePage = 1;
+      loadInvoices().catch((error) => showNotice(error.message, true));
+    }));
+    bind('invoiceSearch', 'input', () => {
+      clearTimeout(state.invoiceSearchTimer);
+      state.invoiceSearchTimer = setTimeout(() => {
+        state.invoiceSearch = byId('invoiceSearch').value.trim().slice(0, 120);
+        state.invoicePage = 1;
+        loadInvoices().catch((error) => showNotice(error.message, true));
+      }, 250);
+    });
+    bind('invoiceRows', 'click', handleInvoiceListAction);
+    bind('invoicePreviousPage', 'click', () => {
+      if (state.invoicePage > 1) { state.invoicePage -= 1; loadInvoices().catch((error) => showNotice(error.message, true)); }
+    });
+    bind('invoiceNextPage', 'click', () => {
+      if (state.invoicePage * state.invoicePageSize < state.invoiceTotal) { state.invoicePage += 1; loadInvoices().catch((error) => showNotice(error.message, true)); }
+    });
+    bind('createNewInvoice', 'click', () => openInvoiceEditor());
+    bind('closeInvoiceEditor', 'click', () => byId('invoiceEditorDialog')?.close());
+    bind('cancelInvoiceEditor', 'click', () => byId('invoiceEditorDialog')?.close());
+    bind('invoiceLineItems', 'input', calculateInvoiceTotals);
+    bind('invoiceLineItems', 'click', (event) => {
+      if (event.target.closest('[data-remove-invoice-item]')) {
+        event.target.closest('.invoice-line-item')?.remove();
+        calculateInvoiceTotals();
+      }
+    });
+    ['invoiceDiscount', 'invoiceTaxRate', 'invoiceCurrency'].forEach((id) => bind(id, 'input', calculateInvoiceTotals));
+    bind('addCustomInvoiceItem', 'click', () => {
+      addInvoiceItem({});
+      byId('invoiceLineItems')?.lastElementChild?.querySelector('[data-field="name"]')?.focus();
+    });
+    bind('invoiceProductSearch', 'input', () => {
+      const results = byId('invoiceProductResults');
+      if (!results) return;
+      const term = byId('invoiceProductSearch').value.trim().toLocaleLowerCase();
+      results.replaceChildren();
+      if (!term) { results.hidden = true; return; }
+      const matches = state.invoiceProducts.filter((product) => `${product.name} ${product.shortName || ''} ${product.description || ''}`.toLocaleLowerCase().includes(term)).slice(0, 12);
+      matches.forEach((product) => {
+        const option = makeElement('button', 'invoice-product-option');
+        option.type = 'button';
+        option.append(makeElement('strong', '', product.name));
+        option.append(makeElement('span', '', product.description || 'Catalogue product'));
+        option.addEventListener('click', () => {
+          addInvoiceItem({ product_slug: product.slug, name: product.name, description: product.description || '', quantity: 1, unit_price: '' });
+          results.hidden = true;
+          byId('invoiceProductSearch').value = '';
+        });
+        results.append(option);
+      });
+      if (!matches.length) results.append(makeElement('p', 'empty-state', 'No matching catalogue products.'));
+      results.hidden = false;
+    });
+    bind('invoiceEditorForm', 'submit', async (event) => {
+      event.preventDefault();
+      const button = byId('saveInvoice');
+      const payload = invoiceFormPayload();
+      button.disabled = true;
+      try {
+        const existingId = byId('invoiceId').value;
+        const result = await api(existingId ? `/invoices/${encodeURIComponent(existingId)}` : '/invoices', {
+          method: existingId ? 'PATCH' : 'POST', body: JSON.stringify(payload)
+        });
+        if (!result.invoice) throw new Error('The server did not return the saved invoice.');
+        byId('invoiceEditorDialog').close();
+        selectInvoiceStatus(result.invoice.status || 'new');
+        state.invoicePage = 1;
+        showView('documents');
+        showNotice(`Invoice ${result.invoice.invoice_number} saved.`);
+        renderInvoiceDetails(result.invoice);
+      } catch (error) {
+        console.error('[Alipen admin] Invoice could not be saved.', error);
+        showNotice(error.message, true);
+      } finally { button.disabled = false; }
+    });
+    bind('closeInvoicePayment', 'click', () => byId('invoicePaymentDialog')?.close());
+    bind('cancelInvoicePayment', 'click', () => byId('invoicePaymentDialog')?.close());
+    bind('invoicePaymentForm', 'submit', async (event) => {
+      event.preventDefault();
+      const invoice = state.invoiceEditing;
+      if (!invoice) return;
+      const form = event.currentTarget;
+      const button = form.querySelector('[type="submit"]');
+      button.disabled = true;
+      try {
+        const result = await api(`/invoices/${encodeURIComponent(invoice.id)}/paid`, {
+          method: 'POST', body: JSON.stringify({
+            payment_date: byId('invoicePaymentDate').value,
+            payment_reference: byId('invoicePaymentReference').value,
+            payment_note: byId('invoicePaymentNote').value,
+          })
+        });
+        byId('invoicePaymentDialog').close();
+        selectInvoiceStatus('paid');
+        state.invoicePage = 1;
+        await loadInvoices();
+        showNotice(`Invoice ${result.invoice.invoice_number} marked as paid.`);
+        renderInvoiceDetails(result.invoice);
+      } catch (error) {
+        console.error('[Alipen admin] Invoice payment could not be recorded.', error);
+        showNotice(error.message, true);
+      } finally { button.disabled = false; }
     });
 
     // Attach interactions before loading dashboard data. Rendering/API errors

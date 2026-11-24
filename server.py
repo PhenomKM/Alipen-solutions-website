@@ -2,6 +2,7 @@
 """Alipen Solutions Agency Ltd website and quote-request service."""
 
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import http.server
 import json
 import html
@@ -21,6 +22,8 @@ from email.utils import parseaddr
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from invoice_documents import invoice_pdf
 
 try:
     import psycopg
@@ -94,6 +97,18 @@ ADMIN_QUOTE_COLUMNS = (
     'email', 'items', 'requirements', 'status', 'created_at',
     'follow_up_date', 'follow_up_note', 'follow_up_completed',
 )
+INVOICE_COLUMNS = (
+    'id', 'invoice_number', 'quote_reference', 'customer_name', 'customer_email',
+    'company_name', 'customer_address', 'invoice_date', 'due_date', 'status',
+    'currency', 'subtotal', 'discount_amount', 'tax_rate', 'tax_amount', 'total',
+    'notes', 'payment_instructions', 'amount_paid', 'payment_date',
+    'payment_reference', 'payment_note', 'created_by', 'created_at', 'updated_at',
+)
+INVOICE_ITEM_COLUMNS = ('id', 'product_slug', 'name', 'description', 'quantity', 'unit_price', 'line_total')
+INVOICE_COLUMN_SQL = ', '.join(INVOICE_COLUMNS)
+INVOICE_ITEM_COLUMN_SQL = ', '.join(INVOICE_ITEM_COLUMNS)
+INVOICE_NUMBER_SEQUENCE = 'alipen_invoice_number_seq'
+_catalogue_product_slugs = None
 STATIC_EXTENSIONS = {
     '.html', '.css', '.js', '.png', '.jpg', '.jpeg', '.webp', '.gif',
     '.svg', '.ico', '.woff', '.woff2', '.ttf',
@@ -169,6 +184,56 @@ def init_database():
         conn.execute('CREATE INDEX IF NOT EXISTS quote_requests_follow_up_idx ON quote_requests (follow_up_date) WHERE follow_up_completed = FALSE')
         conn.execute('CREATE INDEX IF NOT EXISTS quote_requests_status_created_idx ON quote_requests (status, created_at DESC)')
         conn.execute('CREATE INDEX IF NOT EXISTS quote_notes_reference_created_idx ON quote_notes (quote_reference, created_at)')
+        # Additive, idempotent invoice migration. The global sequence allocates
+        # unique invoice numbers safely across concurrent admin requests.
+        conn.execute(f'CREATE SEQUENCE IF NOT EXISTS {INVOICE_NUMBER_SEQUENCE} START WITH 1')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS invoices (
+                id BIGSERIAL PRIMARY KEY,
+                invoice_number VARCHAR(40) NOT NULL UNIQUE,
+                quote_reference VARCHAR(20) REFERENCES quote_requests(reference) ON DELETE SET NULL,
+                customer_name VARCHAR(180) NOT NULL,
+                customer_email VARCHAR(180) NOT NULL DEFAULT '',
+                company_name VARCHAR(180) NOT NULL DEFAULT '',
+                customer_address TEXT NOT NULL DEFAULT '',
+                invoice_date DATE NOT NULL,
+                due_date DATE NOT NULL,
+                status VARCHAR(12) NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'paid')),
+                currency CHAR(3) NOT NULL DEFAULT 'KES',
+                subtotal NUMERIC(14, 2) NOT NULL DEFAULT 0,
+                discount_amount NUMERIC(14, 2) NOT NULL DEFAULT 0,
+                tax_rate NUMERIC(5, 2) NOT NULL DEFAULT 0,
+                tax_amount NUMERIC(14, 2) NOT NULL DEFAULT 0,
+                total NUMERIC(14, 2) NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                payment_instructions TEXT NOT NULL DEFAULT '',
+                amount_paid NUMERIC(14, 2) NOT NULL DEFAULT 0,
+                payment_date DATE,
+                payment_reference VARCHAR(180) NOT NULL DEFAULT '',
+                payment_note TEXT NOT NULL DEFAULT '',
+                created_by VARCHAR(120) NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                pdf_content BYTEA NOT NULL DEFAULT decode('', 'hex')
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS invoice_items (
+                id BIGSERIAL PRIMARY KEY,
+                invoice_id BIGINT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                product_slug VARCHAR(180),
+                name VARCHAR(240) NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                quantity NUMERIC(12, 3) NOT NULL CHECK (quantity > 0),
+                unit_price NUMERIC(14, 2) NOT NULL CHECK (unit_price >= 0),
+                line_total NUMERIC(14, 2) NOT NULL CHECK (line_total >= 0),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS invoices_status_date_idx ON invoices (status, invoice_date DESC, id DESC)')
+        conn.execute('CREATE INDEX IF NOT EXISTS invoices_quote_reference_idx ON invoices (quote_reference)')
+        conn.execute('CREATE INDEX IF NOT EXISTS invoice_items_invoice_position_idx ON invoice_items (invoice_id, position)')
 
 
 def save_quote(data, ip_address):
@@ -537,6 +602,315 @@ def get_admin_quote(reference):
             FROM quote_requests WHERE reference = %s LIMIT 1
         ''', (reference,)).fetchone()
     return serialize_admin_quote(row) if row else None
+
+
+class InvoiceValidationError(ValueError):
+    pass
+
+
+class InvoiceNotFound(LookupError):
+    pass
+
+
+class InvoiceAlreadyPaid(ValueError):
+    pass
+
+
+class InvoicePaidFinancialChange(ValueError):
+    pass
+
+
+def _invoice_decimal(value, field, scale=2, maximum=Decimal('999999999999.99')):
+    if isinstance(value, bool):
+        raise InvoiceValidationError(f'{field} must be a valid non-negative amount.')
+    if value in (None, ''):
+        value = '0'
+    try:
+        number = Decimal(str(value))
+        if not number.is_finite() or number < 0 or number > maximum:
+            raise InvalidOperation
+        return number.quantize(Decimal('1').scaleb(-scale), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError, TypeError):
+        raise InvoiceValidationError(f'{field} must be a valid non-negative amount.')
+
+
+def _invoice_date(value, field, default=None):
+    if value in (None, ''):
+        return default
+    try:
+        parsed = date.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        parsed = None
+    if parsed is None or parsed.year < 2000 or parsed.year > 2200:
+        raise InvoiceValidationError(f'{field} must be a valid date.')
+    return parsed
+
+
+def validate_invoice_payload(data):
+    if not isinstance(data, dict):
+        raise InvoiceValidationError('Provide invoice details.')
+    today = datetime.now(BUSINESS_TIMEZONE).date()
+    invoice_date = _invoice_date(data.get('invoice_date'), 'Invoice date', today)
+    due_date = _invoice_date(data.get('due_date'), 'Due date', invoice_date)
+    if due_date < invoice_date:
+        raise InvoiceValidationError('Due date cannot be before the invoice date.')
+    name = clean_text(data.get('customer_name'), 180)
+    email = clean_text(data.get('customer_email'), 180)
+    company = clean_text(data.get('company_name'), 180)
+    address = clean_text(data.get('customer_address'), 1000)
+    if not name:
+        raise InvoiceValidationError('Customer name is required.')
+    if email and (not EMAIL_RE.fullmatch(email) or parseaddr(email)[1] != email):
+        raise InvoiceValidationError('Enter a valid customer email address.')
+    currency = clean_text(data.get('currency') or 'KES', 3).upper()
+    if not re.fullmatch(r'[A-Z]{3}', currency):
+        raise InvoiceValidationError('Currency must be a three-letter code.')
+
+    items = data.get('items')
+    if not isinstance(items, list) or not items or len(items) > 100:
+        raise InvoiceValidationError('Add between 1 and 100 invoice items.')
+    catalogue_slugs = invoice_catalogue_product_slugs()
+    normalized_items = []
+    subtotal = Decimal('0.00')
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            raise InvoiceValidationError(f'Invoice item {index} is invalid.')
+        name_value = clean_text(item.get('name'), 240)
+        description = clean_text(item.get('description'), 1000)
+        if not name_value:
+            raise InvoiceValidationError(f'Invoice item {index} needs a name.')
+        slug = clean_text(item.get('product_slug'), 180) or None
+        if slug and slug not in catalogue_slugs:
+            raise InvoiceValidationError(f'Invoice item {index} refers to an unknown catalogue product.')
+        if 'unit_price' not in item or item.get('unit_price') in (None, ''):
+            raise InvoiceValidationError(f'Enter a unit price for item {index}.')
+        quantity = _invoice_decimal(item.get('quantity', 1), f'Quantity for item {index}', 3, Decimal('999999.999'))
+        if quantity <= 0:
+            raise InvoiceValidationError(f'Quantity for item {index} must be greater than zero.')
+        unit_price = _invoice_decimal(item.get('unit_price'), f'Unit price for item {index}')
+        line_total = (quantity * unit_price).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        subtotal += line_total
+        if line_total > Decimal('999999999999.99') or subtotal > Decimal('999999999999.99'):
+            raise InvoiceValidationError('Invoice amounts exceed the supported maximum.')
+        normalized_items.append({
+            'product_slug': slug, 'name': name_value, 'description': description,
+            'quantity': quantity, 'unit_price': unit_price, 'line_total': line_total,
+        })
+    subtotal = subtotal.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    discount = _invoice_decimal(data.get('discount_amount'), 'Discount')
+    if discount > subtotal:
+        raise InvoiceValidationError('Discount cannot exceed the subtotal.')
+    tax_rate = _invoice_decimal(data.get('tax_rate'), 'Tax rate', 2, Decimal('100.00'))
+    tax_amount = ((subtotal - discount) * tax_rate / Decimal('100')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    total = subtotal - discount + tax_amount
+    if total > Decimal('999999999999.99'):
+        raise InvoiceValidationError('Invoice total exceeds the supported maximum.')
+    quote_reference = clean_text(data.get('quote_reference'), 20) or None
+    if quote_reference and not re.fullmatch(r'ALIPEN-[A-Za-z0-9]{6}', quote_reference):
+        raise InvoiceValidationError('Quote reference is invalid.')
+    return {
+        'quote_reference': quote_reference, 'customer_name': name, 'customer_email': email,
+        'company_name': company, 'customer_address': address, 'invoice_date': invoice_date,
+        'due_date': due_date, 'currency': currency, 'subtotal': subtotal,
+        'discount_amount': discount, 'tax_rate': tax_rate, 'tax_amount': tax_amount,
+        'total': total, 'notes': clean_text(data.get('notes'), 5000),
+        'payment_instructions': clean_text(data.get('payment_instructions'), 2000),
+        'items': normalized_items,
+    }
+
+
+def invoice_catalogue_product_slugs():
+    global _catalogue_product_slugs
+    if _catalogue_product_slugs is None:
+        source = (DIRECTORY / 'products.js').read_text(encoding='utf-8')
+        _catalogue_product_slugs = set(re.findall(r"\bslug:\s*'([a-z0-9-]+)'", source))
+    return _catalogue_product_slugs
+
+
+def _iso(value):
+    return value.isoformat() if hasattr(value, 'isoformat') else value
+
+
+def _decimal_text(value):
+    return format(Decimal(str(value or 0)).quantize(Decimal('0.01')), '.2f')
+
+
+def serialize_invoice(row, items=None):
+    invoice = dict(zip(INVOICE_COLUMNS, row)) if not isinstance(row, dict) else dict(row)
+    for field in ('invoice_date', 'due_date', 'payment_date', 'created_at', 'updated_at'):
+        invoice[field] = _iso(invoice.get(field))
+    for field in ('subtotal', 'discount_amount', 'tax_rate', 'tax_amount', 'total', 'amount_paid'):
+        invoice[field] = _decimal_text(invoice.get(field))
+    invoice['items'] = [serialize_invoice_item(item) for item in (items or invoice.get('items') or [])]
+    invoice.pop('pdf_content', None)
+    return invoice
+
+
+def serialize_invoice_item(row):
+    item = dict(zip(INVOICE_ITEM_COLUMNS, row)) if not isinstance(row, dict) else dict(row)
+    for field in ('quantity', 'unit_price', 'line_total'):
+        places = 3 if field == 'quantity' else 2
+        item[field] = format(Decimal(str(item.get(field) or 0)).quantize(Decimal('1').scaleb(-places)), f'.{places}f')
+    return item
+
+
+def _insert_invoice_items(conn, invoice_id, items):
+    for position, item in enumerate(items, start=1):
+        conn.execute('''
+            INSERT INTO invoice_items
+                (invoice_id, position, product_slug, name, description, quantity, unit_price, line_total)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (invoice_id, position, item['product_slug'], item['name'], item['description'],
+              item['quantity'], item['unit_price'], item['line_total']))
+
+
+def _invoice_pdf_data(invoice, items):
+    data = dict(invoice)
+    data['items'] = items
+    return data
+
+
+def create_invoice(data, username):
+    invoice = validate_invoice_payload(data)
+    with database_connection() as conn:
+        if invoice['quote_reference']:
+            quote = conn.execute('SELECT reference FROM quote_requests WHERE reference = %s', (invoice['quote_reference'],)).fetchone()
+            if not quote:
+                raise InvoiceNotFound('The selected quote could not be found.')
+        sequence = conn.execute(f"SELECT nextval('{INVOICE_NUMBER_SEQUENCE}')").fetchone()[0]
+        invoice_number = f"ALP-{invoice['invoice_date'].year}-{int(sequence):06d}"
+        params = tuple(invoice[field] for field in (
+            'quote_reference', 'customer_name', 'customer_email', 'company_name', 'customer_address',
+            'invoice_date', 'due_date', 'currency', 'subtotal', 'discount_amount', 'tax_rate',
+            'tax_amount', 'total', 'notes', 'payment_instructions'))
+        row = conn.execute(f'''
+            INSERT INTO invoices
+                (invoice_number, quote_reference, customer_name, customer_email, company_name,
+                 customer_address, invoice_date, due_date, currency, subtotal, discount_amount,
+                 tax_rate, tax_amount, total, notes, payment_instructions, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING {', '.join(INVOICE_COLUMNS)}
+        ''', (invoice_number, *params, clean_text(username, 120))).fetchone()
+        invoice_id = row[0]
+        _insert_invoice_items(conn, invoice_id, invoice['items'])
+        invoice['id'] = invoice_id
+        invoice['invoice_number'] = invoice_number
+        invoice['status'] = 'new'
+        invoice['amount_paid'] = Decimal('0.00')
+        invoice['payment_date'] = None
+        invoice['payment_reference'] = ''
+        invoice['payment_note'] = ''
+        invoice['created_by'] = clean_text(username, 120)
+        invoice['created_at'] = datetime.now(timezone.utc)
+        invoice['updated_at'] = invoice['created_at']
+        pdf_content = invoice_pdf(_invoice_pdf_data(invoice, invoice['items']))
+        conn.execute('UPDATE invoices SET pdf_content = %s WHERE id = %s', (pdf_content, invoice_id))
+    return serialize_invoice(invoice)
+
+
+def list_invoices(search='', status='new', page=1, page_size=20):
+    clauses, params = [], []
+    if status in ('new', 'paid'):
+        clauses.append('status = %s')
+        params.append(status)
+    if search:
+        clauses.append("(invoice_number ILIKE %s OR customer_name ILIKE %s OR company_name ILIKE %s OR customer_email ILIKE %s)")
+        pattern = f'%{search}%'
+        params.extend((pattern, pattern, pattern, pattern))
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ''
+    offset = (page - 1) * page_size
+    with database_connection() as conn:
+        total = conn.execute(f'SELECT COUNT(*) FROM invoices{where}', tuple(params)).fetchone()[0]
+        rows = conn.execute(f'''
+            SELECT {', '.join(INVOICE_COLUMNS)} FROM invoices{where}
+            ORDER BY invoice_date DESC, id DESC LIMIT %s OFFSET %s
+        ''', tuple(params + [page_size, offset])).fetchall()
+    return {'items': [serialize_invoice(row) for row in rows], 'total': total, 'page': page, 'pageSize': page_size}
+
+
+def get_invoice(invoice_id, include_pdf=False, lock=False):
+    with database_connection() as conn:
+        row = conn.execute(f'SELECT {INVOICE_COLUMN_SQL} FROM invoices WHERE id = %s' + (' FOR UPDATE' if lock else ''), (invoice_id,)).fetchone()
+        if not row:
+            return None if not include_pdf else (None, None)
+        items = conn.execute(f'SELECT {INVOICE_ITEM_COLUMN_SQL} FROM invoice_items WHERE invoice_id = %s ORDER BY position, id', (invoice_id,)).fetchall()
+        pdf_content = None
+        if include_pdf:
+            pdf_content = conn.execute('SELECT pdf_content FROM invoices WHERE id = %s', (invoice_id,)).fetchone()[0]
+    return (serialize_invoice(row, items), pdf_content) if include_pdf else serialize_invoice(row, items)
+
+
+def _item_financial_snapshot(items):
+    return [(
+        item.get('product_slug'), item.get('name'), item.get('description'),
+        Decimal(str(item.get('quantity'))).quantize(Decimal('0.001')),
+        Decimal(str(item.get('unit_price'))).quantize(Decimal('0.01')),
+        Decimal(str(item.get('line_total'))).quantize(Decimal('0.01')),
+    ) for item in items]
+
+
+def update_invoice(invoice_id, data):
+    invoice = validate_invoice_payload(data)
+    with database_connection() as conn:
+        row = conn.execute(f'SELECT {INVOICE_COLUMN_SQL} FROM invoices WHERE id = %s FOR UPDATE', (invoice_id,)).fetchone()
+        if not row:
+            raise InvoiceNotFound('Invoice not found.')
+        current = dict(zip(INVOICE_COLUMNS, row))
+        current_items_rows = conn.execute(f'SELECT {INVOICE_ITEM_COLUMN_SQL} FROM invoice_items WHERE invoice_id = %s ORDER BY position, id', (invoice_id,)).fetchall()
+        current_items = [serialize_invoice_item(item) for item in current_items_rows]
+        if current['status'] == 'paid':
+            paid_fields_match = all(
+                Decimal(str(current[field])).quantize(Decimal('0.01')) == invoice[field]
+                for field in ('subtotal', 'discount_amount', 'tax_rate', 'tax_amount', 'total')
+            ) and current['currency'] == invoice['currency']
+            if not paid_fields_match or _item_financial_snapshot(current_items) != _item_financial_snapshot(invoice['items']):
+                raise InvoicePaidFinancialChange('Paid invoice amounts and line items are locked. Create a separate invoice for a financial correction.')
+        updated_row = conn.execute(f'''
+            UPDATE invoices SET customer_name = %s, customer_email = %s, company_name = %s,
+                customer_address = %s, invoice_date = %s, due_date = %s, currency = %s,
+                subtotal = %s, discount_amount = %s, tax_rate = %s, tax_amount = %s,
+                total = %s, notes = %s, payment_instructions = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s RETURNING {', '.join(INVOICE_COLUMNS)}
+        ''', (invoice['customer_name'], invoice['customer_email'], invoice['company_name'],
+              invoice['customer_address'], invoice['invoice_date'], invoice['due_date'], invoice['currency'],
+              invoice['subtotal'], invoice['discount_amount'], invoice['tax_rate'], invoice['tax_amount'],
+              invoice['total'], invoice['notes'], invoice['payment_instructions'], invoice_id)).fetchone()
+        if current['status'] != 'paid':
+            conn.execute('DELETE FROM invoice_items WHERE invoice_id = %s', (invoice_id,))
+            _insert_invoice_items(conn, invoice_id, invoice['items'])
+            pdf_items = invoice['items']
+        else:
+            pdf_items = current_items
+        updated = dict(zip(INVOICE_COLUMNS, updated_row))
+        serialized = serialize_invoice(updated, pdf_items)
+        pdf_content = invoice_pdf(serialized)
+        conn.execute('UPDATE invoices SET pdf_content = %s WHERE id = %s', (pdf_content, invoice_id))
+    return serialize_invoice(updated, pdf_items)
+
+
+def mark_invoice_paid(invoice_id, payment_reference='', payment_note='', payment_date=None):
+    paid_date = _invoice_date(payment_date, 'Payment date', datetime.now(BUSINESS_TIMEZONE).date())
+    reference = clean_text(payment_reference, 180)
+    note = clean_text(payment_note, 2000)
+    with database_connection() as conn:
+        row = conn.execute(f'SELECT {INVOICE_COLUMN_SQL} FROM invoices WHERE id = %s FOR UPDATE', (invoice_id,)).fetchone()
+        if not row:
+            raise InvoiceNotFound('Invoice not found.')
+        current = dict(zip(INVOICE_COLUMNS, row))
+        if current['status'] == 'paid':
+            raise InvoiceAlreadyPaid('This invoice has already been marked as paid.')
+        updated_row = conn.execute(f'''
+            UPDATE invoices SET status = 'paid', amount_paid = total, payment_date = %s,
+                payment_reference = %s, payment_note = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s RETURNING {', '.join(INVOICE_COLUMNS)}
+        ''', (paid_date, reference, note, invoice_id)).fetchone()
+        items = [serialize_invoice_item(item) for item in conn.execute(
+            f'SELECT {INVOICE_ITEM_COLUMN_SQL} FROM invoice_items WHERE invoice_id = %s ORDER BY position, id',
+            (invoice_id,)).fetchall()]
+        updated = dict(zip(INVOICE_COLUMNS, updated_row))
+        pdf_content = invoice_pdf(serialize_invoice(updated, items))
+        conn.execute('UPDATE invoices SET pdf_content = %s WHERE id = %s', (pdf_content, invoice_id))
+    return serialize_invoice(updated, items)
 
 
 def list_quote_notes(reference):
@@ -1051,7 +1425,7 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
         if content_length <= 0:
             self.send_json(400, {'success': False, 'message': 'Request body is required.'})
             return None
-        if content_length > 24 * 1024:
+        if content_length > 160 * 1024:
             self.send_json(413, {'success': False, 'message': 'Request is too large.'})
             return None
         try:
@@ -1125,6 +1499,130 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
                 'authenticated': True, 'username': session['username'],
                 'isPrimary': session.get('is_primary', False), 'csrfToken': session['csrf_token'],
             })
+            return
+
+        if method == 'GET' and path == '/api/admin/invoices':
+            params = urllib.parse.parse_qs(query_string, keep_blank_values=True)
+            search = clean_text(params.get('search', [''])[0], 120)
+            status = params.get('status', ['new'])[0]
+            if status not in ('new', 'paid'):
+                self.send_json(400, {'success': False, 'message': 'Invalid invoice status filter.'})
+                return
+            try:
+                page = int(params.get('page', ['1'])[0])
+            except (TypeError, ValueError):
+                page = 0
+            if page < 1 or page > 1_000_000:
+                self.send_json(400, {'success': False, 'message': 'Invalid invoice page.'})
+                return
+            try:
+                self.send_json(200, list_invoices(search=search, status=status, page=page))
+            except Exception as error:
+                logger.error('Invoice list unavailable exception_type=%s', type(error).__name__)
+                self.send_json(503, {'success': False, 'message': 'Invoices are temporarily unavailable.'})
+            return
+
+        if method == 'POST' and path == '/api/admin/invoices':
+            data = self.read_admin_json()
+            if data is None:
+                return
+            try:
+                invoice = create_invoice(data, session['username'])
+            except InvoiceValidationError as error:
+                self.send_json(422, {'success': False, 'message': str(error)})
+                return
+            except InvoiceNotFound as error:
+                self.send_json(404, {'success': False, 'message': str(error)})
+                return
+            except Exception as error:
+                logger.error('Invoice creation failed exception_type=%s', type(error).__name__)
+                self.send_json(503, {'success': False, 'message': 'Invoice could not be saved.'})
+                return
+            self.send_json(201, {'success': True, 'invoice': invoice})
+            return
+
+        if path.startswith('/api/admin/invoices/'):
+            suffix = path[len('/api/admin/invoices/'):]
+            parts = suffix.split('/')
+            if not parts[0].isdecimal() or len(parts[0]) > 18 or int(parts[0]) < 1:
+                self.send_json(404, {'success': False, 'message': 'Invoice not found.'})
+                return
+            invoice_id = int(parts[0])
+            if len(parts) == 2 and parts[1] == 'pdf' and method == 'GET':
+                try:
+                    invoice, content = get_invoice(invoice_id, include_pdf=True)
+                except Exception as error:
+                    logger.error('Invoice PDF lookup failed exception_type=%s', type(error).__name__)
+                    self.send_json(503, {'success': False, 'message': 'Invoice PDF is temporarily unavailable.'})
+                    return
+                if not invoice or not content:
+                    self.send_json(404, {'success': False, 'message': 'Invoice PDF not found.'})
+                    return
+                safe_number = re.sub(r'[^A-Za-z0-9-]', '', invoice['invoice_number'])
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/pdf')
+                self.send_header('Content-Length', str(len(content)))
+                self.send_header('Content-Disposition', f'attachment; filename="{safe_number}.pdf"')
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                if not getattr(self, '_head_only', False):
+                    self.wfile.write(content)
+                return
+            if len(parts) == 2 and parts[1] == 'paid' and method == 'POST':
+                data = self.read_admin_json()
+                if data is None:
+                    return
+                try:
+                    invoice = mark_invoice_paid(invoice_id, data.get('payment_reference'), data.get('payment_note'), data.get('payment_date'))
+                except InvoiceValidationError as error:
+                    self.send_json(422, {'success': False, 'message': str(error)})
+                    return
+                except InvoiceNotFound as error:
+                    self.send_json(404, {'success': False, 'message': str(error)})
+                    return
+                except InvoiceAlreadyPaid as error:
+                    self.send_json(409, {'success': False, 'message': str(error)})
+                    return
+                except Exception as error:
+                    logger.error('Invoice payment update failed exception_type=%s', type(error).__name__)
+                    self.send_json(503, {'success': False, 'message': 'Invoice payment could not be recorded.'})
+                    return
+                self.send_json(200, {'success': True, 'invoice': invoice})
+                return
+            if len(parts) == 1 and method == 'GET':
+                try:
+                    invoice = get_invoice(invoice_id)
+                except Exception as error:
+                    logger.error('Invoice lookup failed exception_type=%s', type(error).__name__)
+                    self.send_json(503, {'success': False, 'message': 'Invoice is temporarily unavailable.'})
+                    return
+                if not invoice:
+                    self.send_json(404, {'success': False, 'message': 'Invoice not found.'})
+                else:
+                    self.send_json(200, {'invoice': invoice})
+                return
+            if len(parts) == 1 and method == 'PATCH':
+                data = self.read_admin_json()
+                if data is None:
+                    return
+                try:
+                    invoice = update_invoice(invoice_id, data)
+                except InvoiceValidationError as error:
+                    self.send_json(422, {'success': False, 'message': str(error)})
+                    return
+                except InvoiceNotFound as error:
+                    self.send_json(404, {'success': False, 'message': str(error)})
+                    return
+                except InvoicePaidFinancialChange as error:
+                    self.send_json(409, {'success': False, 'message': str(error)})
+                    return
+                except Exception as error:
+                    logger.error('Invoice update failed exception_type=%s', type(error).__name__)
+                    self.send_json(503, {'success': False, 'message': 'Invoice could not be updated.'})
+                    return
+                self.send_json(200, {'success': True, 'invoice': invoice})
+                return
+            self.send_json(404, {'success': False, 'message': 'Invoice endpoint not found.'})
             return
 
         if method == 'GET' and path.startswith('/api/admin/documents/'):
