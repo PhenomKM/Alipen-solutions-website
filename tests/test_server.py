@@ -196,8 +196,12 @@ class ServerTests(unittest.TestCase):
         references = set(re.findall(r"\bbyId\(['\"]([^'\"]+)['\"]\)", admin_js))
         self.assertFalse(duplicated, f'Duplicate admin element IDs: {duplicated}')
         self.assertFalse(references - (set(ids) | set(login_ids)), f'JavaScript references missing page IDs: {sorted(references - (set(ids) | set(login_ids)))}')
-        self.assertIn('admin.js?v=quote-workflow-fix-20261125-1', admin_html)
-        self.assertIn('admin.js?v=quote-workflow-fix-20261125-1', login_html)
+        self.assertEqual(re.findall(r'data-quote-status="([^"]+)"', admin_html), ['new', 'in_progress', 'completed', 'lost'])
+        self.assertRegex(admin_html, r'<input id="allRequestsFilter" type="checkbox"')
+        self.assertRegex(admin_js, r"status: 'new', allQuotes: false")
+        script_version = 'admin.js?v=quote-tabs-20261125-1'
+        self.assertIn(script_version, admin_html)
+        self.assertIn(script_version, login_html)
 
     def test_admin_login_cookie_and_session_security(self):
         status, body, headers = self.admin_login()

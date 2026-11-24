@@ -1,7 +1,7 @@
 (() => {
   const API = '/api/admin';
   const state = {
-    csrfToken: '', page: 1, pageSize: 20, total: 0, search: '', status: 'all', dateFrom: '', dateTo: '', followUp: 'all', currentReference: '', isPrimary: false, username: '',
+    csrfToken: '', page: 1, pageSize: 20, total: 0, search: '', status: 'new', allQuotes: false, dateFrom: '', dateTo: '', followUp: 'all', currentReference: '', isPrimary: false, username: '',
     quoteDialogScrollY: 0, quoteDialogOriginalStyle: null, quoteDialogOriginalStyleCaptured: false,
     quoteDialogViewport: null, quoteDialogViewportSync: null,
     currentQuote: null, invoiceStatus: 'new', invoicePage: 1, invoicePageSize: 20,
@@ -238,12 +238,12 @@
 
   async function loadQuotes() {
     clearNotice();
-    const query = new URLSearchParams({ page: String(state.page), search: state.search, status: state.status, follow_up: state.followUp });
+    const query = new URLSearchParams({ page: String(state.page), search: state.search, status: state.allQuotes ? 'all' : state.status, follow_up: state.followUp });
     if (state.dateFrom) query.set('date_from', state.dateFrom);
     if (state.dateTo) query.set('date_to', state.dateTo);
     const data = await api(`/quotes?${query.toString()}`);
     const counts = data.statusCounts || {};
-    [['all', 'quoteCountAll'], ['new', 'quoteCountNew'], ['in_progress', 'quoteCountProgress'], ['completed', 'quoteCountCompleted'], ['lost', 'quoteCountLost']].forEach(([key, id]) => setText(id, counts[key] || 0));
+    [['new', 'quoteCountNew'], ['in_progress', 'quoteCountProgress'], ['completed', 'quoteCountCompleted'], ['lost', 'quoteCountLost']].forEach(([key, id]) => setText(id, counts[key] || 0));
     state.total = data.total;
     const maxPage = Math.max(1, Math.ceil(state.total / state.pageSize));
     if (state.page > maxPage) {
@@ -746,6 +746,13 @@
 
   function showView(name) {
     if (name === 'users' && !state.isPrimary) return;
+    if (name === 'quotes') {
+      selectQuoteStatus('new');
+      state.allQuotes = false;
+      state.page = 1;
+      const allRequests = byId('allRequestsFilter');
+      if (allRequests) allRequests.checked = false;
+    }
     const overview = name === 'overview';
     byId('overviewView').hidden = name !== 'overview';
     byId('quotesView').hidden = name !== 'quotes';
@@ -897,9 +904,16 @@
     });
     document.querySelectorAll('[data-quote-status]').forEach((tab) => tab.addEventListener('click', () => {
       selectQuoteStatus(tab.dataset.quoteStatus);
+      state.allQuotes = false;
+      byId('allRequestsFilter').checked = false;
       state.page = 1;
       loadQuotes().catch((error) => showNotice(error.message, true));
     }));
+    bind('allRequestsFilter', 'change', () => {
+      state.allQuotes = byId('allRequestsFilter').checked;
+      state.page = 1;
+      loadQuotes().catch((error) => showNotice(error.message, true));
+    });
     const applyDateFilters = () => {
       state.dateFrom = byId('dateFromFilter').value;
       state.dateTo = byId('dateToFilter').value;
@@ -918,7 +932,7 @@
     });
     bind('clearFilters', 'click', () => {
       state.search = '';
-      state.status = 'all';
+      state.allQuotes = true;
       state.dateFrom = '';
       state.dateTo = '';
       state.followUp = 'all';
@@ -927,6 +941,7 @@
       setValue('dateFromFilter', '');
       setValue('dateToFilter', '');
       byId('followUpFilter').checked = false;
+      byId('allRequestsFilter').checked = true;
       loadQuotes().catch((error) => showNotice(error.message, true));
     });
     bind('previousPage', 'click', () => {
