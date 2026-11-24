@@ -45,6 +45,7 @@ class FakeInvoiceConnection:
     def __init__(self):
         self.statements = []
         self.quotes = {'ALIPEN-ABC123'}
+        self.quote_status = {'ALIPEN-ABC123': 'new'}
         self.invoices = {}
         self.items = {}
         self.next_id = 1
@@ -64,6 +65,14 @@ class FakeInvoiceConnection:
         self.result_one, self.result_all = None, []
         if upper.startswith('SELECT REFERENCE FROM QUOTE_REQUESTS'):
             self.result_one = (params[0],) if params[0] in self.quotes else None
+        elif upper.startswith('SELECT STATUS FROM QUOTE_REQUESTS'):
+            self.result_one = (self.quote_status.get(params[0], 'new'),)
+        elif upper.startswith('UPDATE QUOTE_REQUESTS SET STATUS = \'IN_PROGRESS\''):
+            self.quote_status[params[0]] = 'in_progress'
+        elif upper.startswith('UPDATE QUOTE_REQUESTS SET STATUS = \'COMPLETED\''):
+            self.quote_status[params[0]] = 'completed'
+        elif upper.startswith('SELECT COUNT(*) FROM INVOICES WHERE QUOTE_REFERENCE'):
+            self.result_one = (sum(1 for invoice in self.invoices.values() if invoice.get('quote_reference') == params[0] and invoice.get('status') != 'paid'),)
         elif 'NEXTVAL(' in upper:
             self.sequence += 1
             self.result_one = (self.sequence,)
@@ -218,15 +227,15 @@ class ServerTests(unittest.TestCase):
             status, body, _ = self.request('GET', '/api/admin/quotes/ALIPEN-ABC123', headers=auth_headers)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)['reference'], 'ALIPEN-ABC123')
-        with patch.object(server, 'update_admin_quote_status', return_value={'reference': 'ALIPEN-ABC123', 'status': 'completed'}) as update:
-            status, _, _ = self.request('PATCH', '/api/admin/quotes/ALIPEN-ABC123/status', {'status': 'completed'}, auth_headers)
+        with patch.object(server, 'update_admin_quote_status', return_value={'reference': 'ALIPEN-ABC123', 'status': 'lost'}) as update:
+            status, _, _ = self.request('PATCH', '/api/admin/quotes/ALIPEN-ABC123/status', {'status': 'lost'}, auth_headers)
             self.assertEqual(status, 403)
-            status, body, _ = self.request('PATCH', '/api/admin/quotes/ALIPEN-ABC123/status', {'status': 'completed'}, {
+            status, body, _ = self.request('PATCH', '/api/admin/quotes/ALIPEN-ABC123/status', {'status': 'lost'}, {
                 **auth_headers, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf,
             })
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)['quote']['status'], 'completed')
-        update.assert_called_once_with('ALIPEN-ABC123', 'completed')
+        self.assertEqual(json.loads(body)['quote']['status'], 'lost')
+        update.assert_called_once_with('ALIPEN-ABC123', 'lost', None, '')
         with patch.object(server, 'update_admin_quote_status') as invalid_update:
             status, _, _ = self.request('PATCH', '/api/admin/quotes/ALIPEN-ABC123/status', {'status': {'unexpected': True}}, {
                 **auth_headers, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf,
@@ -247,8 +256,8 @@ class ServerTests(unittest.TestCase):
         server.psycopg = SimpleNamespace(connect=lambda *args, **kwargs: connection)
         overview = server.get_admin_overview()
         sql = '\n'.join(statement for statement, _ in connection.statements)
-        self.assertEqual((overview['total'], overview['new'], overview['in_progress'], overview['won'], overview['follow_up_due']), (12, 4, 3, 2, 2))
-        self.assertIn("status = 'won'", sql)
+        self.assertEqual((overview['total'], overview['new'], overview['in_progress'], overview['completed'], overview['follow_up_due']), (12, 4, 3, 1, 2))
+        self.assertIn("status = 'lost'", sql)
         self.assertIn('follow_up_date <= %s', sql)
         self.assertIn('ORDER BY created_at DESC', sql)
         self.assertEqual(overview['recent'], [])
@@ -265,13 +274,24 @@ class ServerTests(unittest.TestCase):
         status, _, _ = self.request('GET', '/api/admin/quotes?date_from=2026-02-01&date_to=2026-01-01', headers={'Cookie': cookie})
         self.assertEqual(status, 400)
 
+    def test_lost_quote_reason_is_csrf_protected_and_persisted(self):
+        status, body, headers = self.admin_login()
+        cookie = headers.get('Set-Cookie').split(';', 1)[0]
+        csrf = json.loads(body)['csrfToken']
+        with patch.object(server, 'update_admin_quote_status', return_value={'reference': 'ALIPEN-ABC123', 'status': 'lost'}) as update:
+            status, _, _ = self.request('PATCH', '/api/admin/quotes/ALIPEN-ABC123/status', {
+                'status': 'lost', 'lost_reason': 'Price too high', 'lost_explanation': 'Customer postponed purchase.'
+            }, {'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf})
+        self.assertEqual(status, 200)
+        update.assert_called_once_with('ALIPEN-ABC123', 'lost', 'Price too high', 'Customer postponed purchase.')
+
     def test_quote_filter_database_query_applies_search_dates_status_and_pagination(self):
         connection = FakeConnection()
         connection.fetchone_result = (41,)
         connection.fetchall_result = []
         server.psycopg = SimpleNamespace(connect=lambda *args, **kwargs: connection)
         result = server.list_admin_quotes(
-            'Clinic', 'won', 3, date_from=datetime(2026, 3, 1).date(),
+            'Clinic', 'completed', 3, date_from=datetime(2026, 3, 1).date(),
             date_to=datetime(2026, 3, 31).date(), follow_up='due', page_size=20,
         )
         self.assertEqual(result['total'], 41)
@@ -280,11 +300,11 @@ class ServerTests(unittest.TestCase):
         self.assertIn('facility ILIKE', count_sql)
         self.assertIn("status = %s", count_sql)
         self.assertIn('follow_up_date <= %s AND follow_up_completed = FALSE', count_sql)
-        self.assertEqual(count_params[:5], ('%Clinic%',) * 4 + ('won',))
+        self.assertEqual(count_params[:5], ('%Clinic%',) * 4 + ('completed',))
         self.assertEqual(count_params[5], datetime(2026, 3, 1, tzinfo=server.BUSINESS_TIMEZONE))
         self.assertEqual(count_params[6], datetime(2026, 4, 1, tzinfo=server.BUSINESS_TIMEZONE))
         self.assertEqual(count_params[7], datetime.now(server.BUSINESS_TIMEZONE).date())
-        self.assertEqual(connection.statements[1][1][-2:], (20, 40))
+        self.assertEqual(connection.statements[2][1][-2:], (20, 40))
 
     def test_private_quote_notes_are_authenticated_csrf_protected_and_not_public(self):
         status, body, headers = self.admin_login()
@@ -440,6 +460,7 @@ class ServerTests(unittest.TestCase):
         connection = FakeInvoiceConnection()
         with patch.object(server, 'database_connection', return_value=connection):
             quote_invoice = server.create_invoice(self.invoice_payload(quote_reference='ALIPEN-ABC123'), 'unit-admin')
+            self.assertEqual(connection.quote_status['ALIPEN-ABC123'], 'in_progress')
             standalone = server.create_invoice(self.invoice_payload(quote_reference=None), 'unit-admin')
             self.assertNotEqual(quote_invoice['invoice_number'], standalone['invoice_number'])
             self.assertEqual(quote_invoice['quote_reference'], 'ALIPEN-ABC123')
@@ -457,6 +478,7 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(len(connection.invoices), 2)
 
             paid = server.mark_invoice_paid(invoice_id, 'BANK-REF-19', 'Paid in full', '2026-11-25')
+            self.assertEqual(connection.quote_status['ALIPEN-ABC123'], 'completed')
             self.assertEqual(paid['status'], 'paid')
             self.assertEqual(paid['amount_paid'], paid['total'])
             self.assertEqual(paid['payment_date'], '2026-11-25')
@@ -485,6 +507,23 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(fetched['payment_reference'], 'BANK-REF-19')
             self.assertEqual(fetched['items'][0]['description'], 'Catalogue snapshot')
             self.assertEqual(pdf_content, connection.invoices[invoice_id]['pdf_content'])
+
+    def test_quote_with_multiple_invoices_completes_only_after_all_are_paid(self):
+        connection = FakeInvoiceConnection()
+        server.psycopg = SimpleNamespace(connect=lambda *args, **kwargs: connection)
+        first = server.create_invoice(self.invoice_payload(quote_reference='ALIPEN-ABC123'), 'unit-admin')
+        second = server.create_invoice(self.invoice_payload(quote_reference='ALIPEN-ABC123'), 'unit-admin')
+        server.mark_invoice_paid(first['id'], 'REF-1', '', '2026-11-25')
+        self.assertEqual(connection.quote_status['ALIPEN-ABC123'], 'in_progress')
+        server.mark_invoice_paid(second['id'], 'REF-2', '', '2026-11-25')
+        self.assertEqual(connection.quote_status['ALIPEN-ABC123'], 'completed')
+
+    def test_standalone_invoice_does_not_change_quote_status(self):
+        connection = FakeInvoiceConnection()
+        server.psycopg = SimpleNamespace(connect=lambda *args, **kwargs: connection)
+        invoice = server.create_invoice(self.invoice_payload(), 'unit-admin')
+        server.mark_invoice_paid(invoice['id'], 'REF', '', '2026-11-25')
+        self.assertEqual(connection.quote_status['ALIPEN-ABC123'], 'new')
 
     def test_invoice_pdf_is_valid_branded_multipage_and_uses_stored_snapshot(self):
         from invoice_documents import invoice_pdf
@@ -821,6 +860,7 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn('test@example.com', result)
         insert = self.db_connections[0].statements[0]
         self.assertIn('INSERT INTO quote_requests', insert[0])
+        self.assertIn("'new'", insert[0])
         self.assertEqual(insert[1][1], '<Test Contact>')
         self.assertEqual(json.loads(insert[1][-2]), [{'name': 'Test ECG', 'quantity': 2}])
 

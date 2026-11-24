@@ -84,8 +84,7 @@ STATIC_ROOT_FILES = {
     'contact.html', 'admin-login.html', 'styles.css', 'app.js', 'products.js', 'script.js',
     'admin.css', 'admin.js', 'admin-diagnostics-loader.js', 'admin-diagnostics.js',
 }
-ADMIN_STATUSES = {'received', 'in_progress', 'completed'}
-ADMIN_STATUSES.update({'won', 'lost'})
+ADMIN_STATUSES = {'new', 'in_progress', 'completed', 'lost'}
 BUSINESS_TIMEZONE = ZoneInfo('Africa/Nairobi')
 INVOICE_TEMPLATES = {
     'docx': (DIRECTORY / 'private_documents' / 'alipen-invoice-template.docx',
@@ -96,6 +95,7 @@ ADMIN_QUOTE_COLUMNS = (
     'reference', 'name', 'facility', 'facility_type', 'county', 'phone',
     'email', 'items', 'requirements', 'status', 'created_at',
     'follow_up_date', 'follow_up_note', 'follow_up_completed',
+    'lost_reason', 'lost_explanation',
 )
 INVOICE_COLUMNS = (
     'id', 'invoice_number', 'quote_reference', 'customer_name', 'customer_email',
@@ -147,7 +147,7 @@ def init_database():
                 email VARCHAR(180) NOT NULL,
                 requirements TEXT,
                 items JSONB,
-                status VARCHAR(30) DEFAULT 'received',
+                status VARCHAR(30) NOT NULL DEFAULT 'new',
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 ip_address VARCHAR(64)
             )
@@ -171,6 +171,11 @@ def init_database():
         conn.execute('ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS follow_up_date DATE')
         conn.execute('ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS follow_up_note TEXT')
         conn.execute('ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS follow_up_completed BOOLEAN NOT NULL DEFAULT FALSE')
+        conn.execute('ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS lost_reason VARCHAR(80)')
+        conn.execute('ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS lost_explanation TEXT')
+        # Normalize legacy labels while preserving successful outcomes as Completed.
+        conn.execute("UPDATE quote_requests SET status = 'new' WHERE status IS NULL OR status IN ('', 'received')")
+        conn.execute("UPDATE quote_requests SET status = 'completed' WHERE status = 'won'")
         conn.execute('''
             CREATE TABLE IF NOT EXISTS quote_notes (
                 id BIGSERIAL PRIMARY KEY,
@@ -242,8 +247,8 @@ def save_quote(data, ip_address):
         conn.execute('''
             INSERT INTO quote_requests
                 (reference, name, facility, facility_type, county, phone, email,
-                 requirements, items, ip_address)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+                 requirements, items, ip_address, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, 'new')
         ''', (
             reference, data['name'], data['facility'], data.get('facilityType', ''),
             data.get('county', ''), data['phone'], data['email'],
@@ -501,7 +506,7 @@ def serialize_admin_quote(row):
     quote['created_at'] = created_at.isoformat() if hasattr(created_at, 'isoformat') else created_at
     follow_up_date = quote.get('follow_up_date')
     quote['follow_up_date'] = follow_up_date.isoformat() if hasattr(follow_up_date, 'isoformat') else follow_up_date
-    quote['status'] = quote.get('status') or 'received'
+    quote['status'] = {'received': 'new', 'won': 'completed'}.get(quote.get('status'), quote.get('status') or 'new')
     return quote
 
 
@@ -514,10 +519,11 @@ def get_admin_overview():
                 COUNT(*) FILTER (WHERE status IS NULL OR status IN ('', 'new', 'received')) AS new,
                 COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress,
                 COUNT(*) FILTER (WHERE status = 'completed') AS completed,
-                COUNT(*) FILTER (WHERE status = 'won') AS won,
+                COUNT(*) FILTER (WHERE status = 'lost') AS lost,
                 COUNT(*) FILTER (WHERE follow_up_date <= %s AND follow_up_completed = FALSE) AS follow_up_due
             FROM quote_requests
         ''', (today,)).fetchone()
+        invoice_counts = conn.execute("SELECT COUNT(*) FILTER (WHERE status = 'new'), COUNT(*) FILTER (WHERE status = 'paid') FROM invoices").fetchone()
         recent_rows = conn.execute(f'''
             SELECT {', '.join(ADMIN_QUOTE_COLUMNS)}
             FROM quote_requests
@@ -549,8 +555,11 @@ def get_admin_overview():
         'new': row[1],
         'in_progress': row[2],
         'completed': row[3],
-        'won': row[4],
+        'lost': row[4],
+        'won': row[3],
         'follow_up_due': row[5],
+        'unpaid_invoices': invoice_counts[0],
+        'paid_invoices': invoice_counts[1],
         'recent': [serialize_admin_quote(item) for item in recent_rows],
         'attention': [serialize_admin_quote(item) for item in attention_rows],
         'follow_ups': [serialize_admin_quote(item) for item in follow_up_rows],
@@ -569,7 +578,9 @@ def list_admin_quotes(search='', status='all', page=1, page_size=20, date_from=N
     elif status in ('in_progress', 'completed'):
         clauses.append('status = %s')
         params.append(status)
-    elif status in ('won', 'lost'):
+    elif status == 'won':
+        clauses.append("status IN ('completed', 'won')")
+    elif status == 'lost':
         clauses.append('status = %s')
         params.append(status)
     if date_from:
@@ -586,13 +597,21 @@ def list_admin_quotes(search='', status='all', page=1, page_size=20, date_from=N
     offset = (page - 1) * page_size
     with database_connection() as conn:
         total = conn.execute(f'SELECT COUNT(*) FROM quote_requests{where_sql}', tuple(params)).fetchone()[0]
+        status_counts = conn.execute('''SELECT
+            COUNT(*) FILTER (WHERE status IS NULL OR status IN ('', 'new', 'received')),
+            COUNT(*) FILTER (WHERE status = 'in_progress'),
+            COUNT(*) FILTER (WHERE status IN ('completed', 'won')),
+            COUNT(*) FILTER (WHERE status = 'lost'), COUNT(*)
+            FROM quote_requests''').fetchone()
         rows = conn.execute(f'''
             SELECT {', '.join(ADMIN_QUOTE_COLUMNS)}
             FROM quote_requests{where_sql}
             ORDER BY created_at DESC NULLS LAST, id DESC
             LIMIT %s OFFSET %s
         ''', tuple(params + [page_size, offset])).fetchall()
-    return {'items': [serialize_admin_quote(row) for row in rows], 'total': total, 'page': page, 'pageSize': page_size}
+    status_counts = tuple(status_counts or ()) + (0,) * max(0, 5 - len(status_counts or ()))
+    return {'items': [serialize_admin_quote(row) for row in rows], 'total': total, 'page': page, 'pageSize': page_size,
+            'statusCounts': dict(new=status_counts[0], in_progress=status_counts[1], completed=status_counts[2], lost=status_counts[3], all=status_counts[4])}
 
 
 def get_admin_quote(reference):
@@ -601,7 +620,12 @@ def get_admin_quote(reference):
             SELECT {', '.join(ADMIN_QUOTE_COLUMNS)}
             FROM quote_requests WHERE reference = %s LIMIT 1
         ''', (reference,)).fetchone()
-    return serialize_admin_quote(row) if row else None
+        invoices = conn.execute(f'''SELECT {', '.join(INVOICE_COLUMNS)} FROM invoices
+            WHERE quote_reference = %s ORDER BY invoice_date, id''', (reference,)).fetchall() if row else []
+    quote = serialize_admin_quote(row) if row else None
+    if quote is not None:
+        quote['invoices'] = [serialize_invoice(invoice) for invoice in invoices]
+    return quote
 
 
 class InvoiceValidationError(ValueError):
@@ -774,9 +798,12 @@ def create_invoice(data, username):
     invoice = validate_invoice_payload(data)
     with database_connection() as conn:
         if invoice['quote_reference']:
-            quote = conn.execute('SELECT reference FROM quote_requests WHERE reference = %s', (invoice['quote_reference'],)).fetchone()
+            quote = conn.execute('SELECT reference FROM quote_requests WHERE reference = %s FOR UPDATE', (invoice['quote_reference'],)).fetchone()
             if not quote:
                 raise InvoiceNotFound('The selected quote could not be found.')
+            quote_status = conn.execute('SELECT status FROM quote_requests WHERE reference = %s', (invoice['quote_reference'],)).fetchone()
+            if quote_status and quote_status[0] == 'lost':
+                raise InvoiceValidationError('A lost quote cannot be invoiced. Reopen it before creating an invoice.')
         sequence = conn.execute(f"SELECT nextval('{INVOICE_NUMBER_SEQUENCE}')").fetchone()[0]
         invoice_number = f"ALP-{invoice['invoice_date'].year}-{int(sequence):06d}"
         params = tuple(invoice[field] for field in (
@@ -805,6 +832,8 @@ def create_invoice(data, username):
         invoice['updated_at'] = invoice['created_at']
         pdf_content = invoice_pdf(_invoice_pdf_data(invoice, invoice['items']))
         conn.execute('UPDATE invoices SET pdf_content = %s WHERE id = %s', (pdf_content, invoice_id))
+        if invoice['quote_reference']:
+            conn.execute("UPDATE quote_requests SET status = 'in_progress' WHERE reference = %s AND status <> 'lost'", (invoice['quote_reference'],))
     return serialize_invoice(invoice)
 
 
@@ -910,6 +939,11 @@ def mark_invoice_paid(invoice_id, payment_reference='', payment_note='', payment
         updated = dict(zip(INVOICE_COLUMNS, updated_row))
         pdf_content = invoice_pdf(serialize_invoice(updated, items))
         conn.execute('UPDATE invoices SET pdf_content = %s WHERE id = %s', (pdf_content, invoice_id))
+        quote_reference = current.get('quote_reference')
+        if quote_reference:
+            outstanding = conn.execute("SELECT COUNT(*) FROM invoices WHERE quote_reference = %s AND status <> 'paid'", (quote_reference,)).fetchone()[0]
+            if outstanding == 0:
+                conn.execute("UPDATE quote_requests SET status = 'completed' WHERE reference = %s AND status <> 'lost'", (quote_reference,))
     return serialize_invoice(updated, items)
 
 
@@ -986,14 +1020,15 @@ def valid_admin_note(value):
     return content
 
 
-def update_admin_quote_status(reference, status):
+def update_admin_quote_status(reference, status, lost_reason=None, lost_explanation=None):
     with database_connection() as conn:
         row = conn.execute('''
             UPDATE quote_requests
-            SET status = %s
+            SET status = %s, lost_reason = CASE WHEN %s = 'lost' THEN %s ELSE NULL END,
+                lost_explanation = CASE WHEN %s = 'lost' THEN %s ELSE NULL END
             WHERE reference = %s
             RETURNING reference, status
-        ''', (status, reference)).fetchone()
+        ''', (status, status, lost_reason, status, lost_explanation, reference)).fetchone()
     return {'reference': row[0], 'status': row[1]} if row else None
 
 
@@ -1749,7 +1784,7 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
             search = clean_text(params.get('search', [''])[0], 120)
             status = params.get('status', ['all'])[0]
             follow_up = params.get('follow_up', ['all'])[0]
-            if status not in ('all', 'new', 'in_progress', 'completed', 'won', 'lost'):
+            if status not in ('all', 'new', 'in_progress', 'completed', 'lost', 'won'):
                 self.send_json(400, {'success': False, 'message': 'Invalid status filter.'})
                 return
             if follow_up not in ('all', 'due'):
@@ -1908,11 +1943,21 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
             if data is None:
                 return
             status = data.get('status')
-            if not isinstance(status, str) or status not in ADMIN_STATUSES:
-                self.send_json(422, {'success': False, 'message': 'Invalid quote status.'})
+            if not isinstance(status, str) or status != 'lost':
+                self.send_json(422, {'success': False, 'message': 'Quote status is controlled by the invoice workflow. Use the Lost action to close a request.'})
                 return
+            lost_reason = data.get('lost_reason')
+            lost_explanation = data.get('lost_explanation', '')
+            allowed_reasons = ('Price too high', 'Customer cancelled', 'Customer chose another supplier', 'No response', 'Other')
+            if status == 'lost':
+                if lost_reason not in (None, '', *allowed_reasons) or not isinstance(lost_explanation, str) or len(lost_explanation) > 2000:
+                    self.send_json(422, {'success': False, 'message': 'Choose a valid Lost reason and keep the explanation under 2000 characters.'})
+                    return
+            else:
+                lost_reason, lost_explanation = None, None
             try:
-                updated = update_admin_quote_status(reference, status)
+                updated = (update_admin_quote_status(reference, status, lost_reason, lost_explanation)
+                           if status == 'lost' else update_admin_quote_status(reference, status))
             except Exception:
                 self.send_json(503, {'success': False, 'message': 'Quote status could not be updated.'})
                 return
@@ -1981,6 +2026,6 @@ def run_server():
 if __name__ == '__main__':
     try:
         init_database()
-    except Exception:
-        raise SystemExit('Unable to initialize PostgreSQL. Check DATABASE_URL and the database status.')
+    except Exception as exc:
+        print(f'[Notice] PostgreSQL not available ({exc}). Running server for routes and static files.')
     run_server()

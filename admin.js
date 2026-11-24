@@ -82,13 +82,14 @@
     if (!status || status === 'received' || status === 'new') return 'New';
     if (status === 'in_progress') return 'In progress';
     if (status === 'completed') return 'Completed';
-    if (status === 'won') return 'Won';
+    if (status === 'won') return 'Completed';
     if (status === 'lost') return 'Lost';
     return status;
   }
 
   function statusClass(status) {
-    if (status === 'in_progress' || status === 'completed' || status === 'won' || status === 'lost') return status;
+    if (status === 'won') return 'completed';
+    if (status === 'in_progress' || status === 'completed' || status === 'lost') return status;
     if (!status || status === 'received' || status === 'new') return 'new';
     return 'other';
   }
@@ -143,32 +144,6 @@
     detailsButton.type = 'button';
     detailsButton.addEventListener('click', () => openQuote(quote.reference));
     actionCell.append(detailsButton);
-    const quickStatus = document.createElement('select');
-    quickStatus.className = 'row-status-select';
-    quickStatus.setAttribute('aria-label', `Update status for ${quote.reference}`);
-    [['received', 'New'], ['in_progress', 'In progress'], ['completed', 'Completed'], ['won', 'Won'], ['lost', 'Lost']].forEach(([value, label]) => {
-      const option = makeElement('option', '', label);
-      option.value = value;
-      quickStatus.append(option);
-    });
-    quickStatus.value = ['received', 'new', 'in_progress', 'completed', 'won', 'lost'].includes(quote.status)
-      ? (quote.status === 'new' ? 'received' : quote.status)
-      : 'received';
-    quickStatus.addEventListener('change', async () => {
-      const previousStatus = ['received', 'new', 'in_progress', 'completed', 'won', 'lost'].includes(quote.status)
-        ? (quote.status === 'new' ? 'received' : quote.status)
-        : 'received';
-      quickStatus.disabled = true;
-      try {
-        await api(`/quotes/${encodeURIComponent(quote.reference)}/status`, { method: 'PATCH', body: JSON.stringify({ status: quickStatus.value }) });
-        showNotice('Quote status updated.');
-        await Promise.all([loadOverview(), loadQuotes()]);
-      } catch (error) {
-        quickStatus.value = previousStatus;
-        showNotice(error.message, true);
-      } finally { quickStatus.disabled = false; }
-    });
-    actionCell.append(quickStatus);
     row.append(actionCell);
     tbody.append(row);
   }
@@ -189,7 +164,10 @@
       ['total requests', () => setText('totalCount', data.total)],
       ['new requests', () => setText('newCount', data.new)],
       ['in progress requests', () => setText('progressCount', data.in_progress)],
-      ['won requests', () => setText('wonCount', data.won || 0)],
+      ['completed orders', () => setText('completedCount', data.completed || 0)],
+      ['lost requests', () => setText('lostCount', data.lost || 0)],
+      ['unpaid invoices', () => setText('unpaidInvoiceCount', data.unpaid_invoices || 0)],
+      ['paid invoices', () => setText('paidInvoiceCount', data.paid_invoices || 0)],
       ['due follow-ups', () => setText('followUpCount', data.follow_up_due || 0)],
       ['recent requests', () => renderRecent(data.recent || [])],
       ['attention list', () => renderAttention(data.attention || [])],
@@ -254,6 +232,8 @@
     if (state.dateFrom) query.set('date_from', state.dateFrom);
     if (state.dateTo) query.set('date_to', state.dateTo);
     const data = await api(`/quotes?${query.toString()}`);
+    const counts = data.statusCounts || {};
+    [['all', 'quoteCountAll'], ['new', 'quoteCountNew'], ['in_progress', 'quoteCountProgress'], ['completed', 'quoteCountCompleted'], ['lost', 'quoteCountLost']].forEach(([key, id]) => setText(id, counts[key] || 0));
     state.total = data.total;
     const maxPage = Math.max(1, Math.ceil(state.total / state.pageSize));
     if (state.page > maxPage) {
@@ -269,6 +249,11 @@
     setText('pageSummary', `Showing ${first}–${last} of ${state.total} requests`);
     byId('previousPage').disabled = state.page <= 1;
     byId('nextPage').disabled = last >= state.total;
+    document.querySelectorAll('[data-quote-status]').forEach((tab) => {
+      const active = tab.dataset.quoteStatus === state.status;
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', String(active));
+    });
   }
 
   async function loadAdminUsers() {
@@ -788,6 +773,21 @@
       setText('detailEmail', quote.email || '—');
       setText('detailDate', formatDate(quote.created_at));
       setText('detailRequirements', quote.requirements || 'No additional requirements provided.');
+      setText('detailLostReason', [quote.lost_reason, quote.lost_explanation].filter(Boolean).join(' — ') || 'No reason recorded.');
+      const invoiceHost = byId('detailInvoices');
+      invoiceHost.replaceChildren();
+      const linkedInvoices = quote.invoices || [];
+      if (!linkedInvoices.length) invoiceHost.textContent = 'No invoices linked.';
+      linkedInvoices.forEach((invoice) => {
+        const line = makeElement('p', 'linked-invoice-row');
+        const view = makeElement('button', 'reference-link', invoice.invoice_number);
+        view.type = 'button';
+        view.addEventListener('click', () => openInvoice(invoice.id));
+        line.append(view, makeElement('span', '', `${invoice.status === 'paid' ? 'Paid' : 'Unpaid'}${invoice.payment_date ? ` · paid ${invoiceDateLabel(invoice.payment_date)}` : ''}`));
+        invoiceHost.append(line);
+      });
+      byId('createInvoiceFromQuote').disabled = quote.status === 'lost';
+      byId('markQuoteLost').hidden = quote.status === 'lost' || quote.status === 'completed';
       byId('followUpDate').value = quote.follow_up_date || '';
       byId('followUpNote').value = quote.follow_up_note || '';
       byId('followUpCompleted').checked = Boolean(quote.follow_up_completed);
@@ -799,7 +799,6 @@
       } else {
         itemList.append(makeElement('li', '', 'General catalogue and procurement inquiry'));
       }
-      byId('detailStatus').value = ['received', 'new', 'in_progress', 'completed', 'won', 'lost'].includes(quote.status) ? (quote.status === 'new' ? 'received' : quote.status) : 'received';
       await loadPrivateNotes(quote.reference);
       loading.hidden = true;
       content.hidden = false;
@@ -878,11 +877,11 @@
         loadQuotes().catch((error) => showNotice(error.message, true));
       }, 250);
     });
-    bind('statusFilter', 'change', () => {
-      state.status = byId('statusFilter').value;
+    document.querySelectorAll('[data-quote-status]').forEach((tab) => tab.addEventListener('click', () => {
+      state.status = tab.dataset.quoteStatus;
       state.page = 1;
       loadQuotes().catch((error) => showNotice(error.message, true));
-    });
+    }));
     const applyDateFilters = () => {
       state.dateFrom = byId('dateFromFilter').value;
       state.dateTo = byId('dateToFilter').value;
@@ -907,7 +906,6 @@
       state.followUp = 'all';
       state.page = 1;
       byId('quoteSearch').value = '';
-      byId('statusFilter').value = 'all';
       byId('dateFromFilter').value = '';
       byId('dateToFilter').value = '';
       byId('followUpFilter').checked = false;
@@ -1014,17 +1012,22 @@
         }
       });
     }
-    bind('statusForm', 'submit', async (event) => {
+    bind('statusForm', 'submit', (event) => event.preventDefault());
+    bind('markQuoteLost', 'click', () => { byId('lostReason').value = ''; byId('lostExplanation').value = ''; byId('lostQuoteDialog').showModal(); });
+    bind('closeLostQuote', 'click', () => byId('lostQuoteDialog').close());
+    bind('cancelLostQuote', 'click', () => byId('lostQuoteDialog').close());
+    bind('lostQuoteForm', 'submit', async (event) => {
       event.preventDefault();
-      const button = byId('saveStatus');
+      const button = byId('confirmLostQuote');
       button.disabled = true;
       try {
         await api(`/quotes/${encodeURIComponent(state.currentReference)}/status`, {
           method: 'PATCH',
-          body: JSON.stringify({ status: byId('detailStatus').value })
+          body: JSON.stringify({ status: 'lost', lost_reason: byId('lostReason').value, lost_explanation: byId('lostExplanation').value })
         });
+        byId('lostQuoteDialog').close();
         byId('quoteDetailDialog').close();
-        showNotice('Quote status updated.');
+        showNotice('Quote marked as Lost.');
         await Promise.all([loadOverview(), loadQuotes()]);
       } catch (error) {
         showNotice(error.message, true);

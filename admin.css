@@ -112,6 +112,16 @@ button { cursor: pointer; }
 .admin-notice { margin: 0 0 18px; padding: 11px 14px; border: 1px solid #bfdbfe; border-radius: 8px; background: #eff6ff; color: #1e40af; font-size: 12px; }
 .admin-notice.error { border-color: #fecaca; background: #fef2f2; color: #b42318; }
 .quote-list-panel { padding: 0 0 3px; }
+.quote-status-tabs { display:flex; gap:8px; overflow-x:auto; width:100%; padding:4px 0 10px; }
+.quote-status-tab { flex:0 0 auto; border:1px solid #dbe4ee; border-radius:999px; background:#fff; color:#334155; padding:9px 13px; font:inherit; font-size:13px; font-weight:650; cursor:pointer; }
+.quote-status-tab span { display:inline-grid; place-items:center; min-width:22px; height:22px; margin-left:5px; border-radius:999px; background:#eef3f8; color:#475569; font-size:11px; }
+.quote-status-tab.active { background:#0d3c78; border-color:#0d3c78; color:#fff; }
+.quote-status-tab.active span { background:rgba(255,255,255,.2); color:#fff; }
+.linked-invoice-row { display:flex; align-items:center; gap:12px; margin:6px 0; }
+.lost-quote-dialog form { display:grid; gap:14px; }
+.lost-quote-dialog form label { display:grid; gap:6px; color:#334155; font-weight:600; }
+.lost-quote-dialog select,.lost-quote-dialog textarea { width:100%; border:1px solid #cbd5e1; border-radius:8px; padding:10px; font:inherit; }
+@media (max-width: 640px) { .quote-status-tabs { margin:0 14px; width:calc(100% - 28px); } }
 .quote-toolbar { display: flex; gap: 10px; padding: 16px 18px; }
 .search-control { display: flex; align-items: center; gap: 8px; width: min(100%, 435px); padding: 0 11px; border: 1px solid #cbd5e1; border-radius: 9px; background: #fff; color: #94a3b8; }
 .search-control > span:not(.sr-only) { font-size: 21px; line-height: 1; }
