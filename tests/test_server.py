@@ -8,6 +8,7 @@ import unittest
 import urllib.error
 import urllib.request
 import zipfile
+from collections import Counter
 from pathlib import Path
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -184,6 +185,19 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 401)
         status, _, _ = self.request('GET', '/admin.html')
         self.assertEqual(status, 404)
+
+    def test_admin_script_references_existing_unique_page_ids_and_both_pages_use_cache_version(self):
+        admin_html = (server.DIRECTORY / 'admin.html').read_text(encoding='utf-8')
+        login_html = (server.DIRECTORY / 'admin-login.html').read_text(encoding='utf-8')
+        admin_js = (server.DIRECTORY / 'admin.js').read_text(encoding='utf-8')
+        ids = re.findall(r'\bid=["\']([^"\']+)["\']', admin_html)
+        login_ids = re.findall(r'\bid=["\']([^"\']+)["\']', login_html)
+        duplicated = sorted(value for value, count in Counter(ids).items() if count > 1)
+        references = set(re.findall(r"\bbyId\(['\"]([^'\"]+)['\"]\)", admin_js))
+        self.assertFalse(duplicated, f'Duplicate admin element IDs: {duplicated}')
+        self.assertFalse(references - (set(ids) | set(login_ids)), f'JavaScript references missing page IDs: {sorted(references - (set(ids) | set(login_ids)))}')
+        self.assertIn('admin.js?v=quote-workflow-fix-20261125-1', admin_html)
+        self.assertIn('admin.js?v=quote-workflow-fix-20261125-1', login_html)
 
     def test_admin_login_cookie_and_session_security(self):
         status, body, headers = self.admin_login()

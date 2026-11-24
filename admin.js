@@ -21,6 +21,16 @@
     return true;
   }
 
+  function setValue(id, value) {
+    const node = byId(id);
+    if (!node) {
+      const error = new Error(`Admin page is missing required value control #${id}.`);
+      console.error('[Alipen admin] Required form control is missing', error);
+      throw error;
+    }
+    node.value = value === undefined || value === null ? '' : String(value);
+  }
+
   function bind(id, eventName, handler) {
     const node = byId(id);
     if (!node) {
@@ -316,6 +326,15 @@
     });
   }
 
+  function selectQuoteStatus(status) {
+    state.status = status;
+    document.querySelectorAll('[data-quote-status]').forEach((tab) => {
+      const active = tab.dataset.quoteStatus === status;
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', String(active));
+    });
+  }
+
   async function loadInvoices() {
     const query = new URLSearchParams({ status: state.invoiceStatus, search: state.invoiceSearch, page: String(state.invoicePage) });
     const data = await api(`/invoices?${query}`);
@@ -496,21 +515,21 @@
     if (!form) return;
     form.reset();
     byId('invoiceLineItems').replaceChildren();
-    byId('invoiceId').value = invoice?.id || '';
-    byId('invoiceQuoteReference').value = invoice?.quote_reference || quote?.reference || '';
+    setValue('invoiceId', invoice?.id || '');
+    setValue('invoiceQuoteReference', invoice?.quote_reference || quote?.reference || '');
     setText('invoiceEditorTitle', invoice ? `Edit ${invoice.invoice_number}` : 'Create invoice');
     setText('invoiceNumberHint', invoice ? `Invoice number: ${invoice.invoice_number}${invoice.status === 'paid' ? ' · paid financial details are locked' : ''}` : 'Invoice number will be assigned when saved.');
-    byId('invoiceCustomerName').value = invoice?.customer_name || quote?.name || '';
-    byId('invoiceCustomerEmail').value = invoice?.customer_email || quote?.email || '';
-    byId('invoiceCompanyName').value = invoice?.company_name || quote?.facility || '';
-    byId('invoiceCustomerAddress').value = invoice?.customer_address || '';
-    byId('invoiceDate').value = invoice?.invoice_date || nairobiToday();
-    byId('invoiceDueDate').value = invoice?.due_date || nairobiToday();
-    byId('invoiceCurrency').value = invoice?.currency || 'KES';
-    byId('invoiceDiscount').value = invoice?.discount_amount || '0.00';
-    byId('invoiceTaxRate').value = invoice?.tax_rate || '0.00';
-    byId('invoiceNotes').value = invoice?.notes || '';
-    byId('invoicePaymentInstructions').value = invoice?.payment_instructions || '[Insert verified payment instructions]';
+    setValue('invoiceCustomerName', invoice?.customer_name || quote?.name || '');
+    setValue('invoiceCustomerEmail', invoice?.customer_email || quote?.email || '');
+    setValue('invoiceCompanyName', invoice?.company_name || quote?.facility || '');
+    setValue('invoiceCustomerAddress', invoice?.customer_address || '');
+    setValue('invoiceDate', invoice?.invoice_date || nairobiToday());
+    setValue('invoiceDueDate', invoice?.due_date || nairobiToday());
+    setValue('invoiceCurrency', invoice?.currency || 'KES');
+    setValue('invoiceDiscount', invoice?.discount_amount || '0.00');
+    setValue('invoiceTaxRate', invoice?.tax_rate || '0.00');
+    setValue('invoiceNotes', invoice?.notes || '');
+    setValue('invoicePaymentInstructions', invoice?.payment_instructions || '[Insert verified payment instructions]');
     (invoice?.items || quote?.items || []).forEach((item) => addInvoiceItem({
       product_slug: item.product_slug || item.slug || '',
       name: item.name || item.shortName || '',
@@ -611,9 +630,9 @@
   function openInvoicePayment(invoice) {
     state.invoiceEditing = invoice;
     setText('invoicePaymentPrompt', `${invoice.invoice_number} · ${invoiceMoney(invoice.total, invoice.currency)}. Confirm the full amount was received.`);
-    byId('invoicePaymentDate').value = nairobiToday();
-    byId('invoicePaymentReference').value = '';
-    byId('invoicePaymentNote').value = '';
+    setValue('invoicePaymentDate', nairobiToday());
+    setValue('invoicePaymentReference', '');
+    setValue('invoicePaymentNote', '');
     byId('invoicePaymentDialog').showModal();
   }
 
@@ -788,8 +807,8 @@
       });
       byId('createInvoiceFromQuote').disabled = quote.status === 'lost';
       byId('markQuoteLost').hidden = quote.status === 'lost' || quote.status === 'completed';
-      byId('followUpDate').value = quote.follow_up_date || '';
-      byId('followUpNote').value = quote.follow_up_note || '';
+      setValue('followUpDate', quote.follow_up_date || '');
+      setValue('followUpNote', quote.follow_up_note || '');
       byId('followUpCompleted').checked = Boolean(quote.follow_up_completed);
       const itemList = byId('detailItems');
       itemList.replaceChildren();
@@ -850,7 +869,6 @@
     } catch (error) {
       if (error.message) showNotice(error.message, true);
       console.error('[Alipen admin] Dashboard session initialization failed', error);
-      return;
     }
 
     document.querySelectorAll('[data-admin-view]').forEach((button) => {
@@ -878,7 +896,7 @@
       }, 250);
     });
     document.querySelectorAll('[data-quote-status]').forEach((tab) => tab.addEventListener('click', () => {
-      state.status = tab.dataset.quoteStatus;
+      selectQuoteStatus(tab.dataset.quoteStatus);
       state.page = 1;
       loadQuotes().catch((error) => showNotice(error.message, true));
     }));
@@ -905,9 +923,9 @@
       state.dateTo = '';
       state.followUp = 'all';
       state.page = 1;
-      byId('quoteSearch').value = '';
-      byId('dateFromFilter').value = '';
-      byId('dateToFilter').value = '';
+      setValue('quoteSearch', '');
+      setValue('dateFromFilter', '');
+      setValue('dateToFilter', '');
       byId('followUpFilter').checked = false;
       loadQuotes().catch((error) => showNotice(error.message, true));
     });
@@ -1013,7 +1031,7 @@
       });
     }
     bind('statusForm', 'submit', (event) => event.preventDefault());
-    bind('markQuoteLost', 'click', () => { byId('lostReason').value = ''; byId('lostExplanation').value = ''; byId('lostQuoteDialog').showModal(); });
+    bind('markQuoteLost', 'click', () => { setValue('lostReason', ''); setValue('lostExplanation', ''); byId('lostQuoteDialog').showModal(); });
     bind('closeLostQuote', 'click', () => byId('lostQuoteDialog').close());
     bind('cancelLostQuote', 'click', () => byId('lostQuoteDialog').close());
     bind('lostQuoteForm', 'submit', async (event) => {
@@ -1097,7 +1115,7 @@
         option.addEventListener('click', () => {
           addInvoiceItem({ product_slug: product.slug, name: product.name, description: product.description || '', quantity: 1, unit_price: '' });
           results.hidden = true;
-          byId('invoiceProductSearch').value = '';
+          setValue('invoiceProductSearch', '');
         });
         results.append(option);
       });
