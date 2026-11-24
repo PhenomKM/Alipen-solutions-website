@@ -25,6 +25,7 @@
         <button type="button" class="admin-nav-link" data-admin-view="quotes">
           <span class="nav-mark" aria-hidden="true">▤</span><span>Quote requests</span>
         </button>
+        <button type="button" class="admin-nav-link" data-admin-view="documents"><span class="nav-mark" aria-hidden="true">▤</span><span>Invoices</span></button>
         <button id="adminUsersNav" type="button" class="admin-nav-link" data-admin-view="users" hidden>
           <svg class="nav-mark nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.25"/><path d="M3.5 19v-1.2a5.5 5.5 0 0 1 11 0V19zM16 5.2a3.2 3.2 0 0 1 0 5.6M17 13.2a4.8 4.8 0 0 1 3.5 4.6V19h-4"/></svg><span>Admin accounts</span>
         </button>
@@ -58,8 +59,11 @@
             <article class="stat-card stat-total"><span class="stat-icon" aria-hidden="true">▤</span><span class="stat-label">Total requests</span><strong id="totalCount" class="stat-value">—</strong><span class="stat-caption">All received enquiries</span></article>
             <article class="stat-card stat-new"><span class="stat-icon" aria-hidden="true">✳</span><span class="stat-label">New requests</span><strong id="newCount" class="stat-value">—</strong><span class="stat-caption">Awaiting first review</span></article>
             <article class="stat-card stat-progress"><span class="stat-icon" aria-hidden="true">◷</span><span class="stat-label">In progress</span><strong id="progressCount" class="stat-value">—</strong><span class="stat-caption">Currently being handled</span></article>
-            <article class="stat-card stat-complete"><span class="stat-icon" aria-hidden="true">✓</span><span class="stat-label">Completed</span><strong id="completedCount" class="stat-value">—</strong><span class="stat-caption">Closed requests</span></article>
+            <article class="stat-card stat-followup"><span class="stat-icon" aria-hidden="true">◷</span><span class="stat-label">Follow-ups due</span><strong id="followUpCount" class="stat-value">—</strong><span class="stat-caption">Today or overdue · Nairobi time</span></article>
+            <article class="stat-card stat-complete"><span class="stat-icon" aria-hidden="true">✓</span><span class="stat-label">Won</span><strong id="wonCount" class="stat-value">—</strong><span class="stat-caption">Successfully secured</span></article>
           </div>
+          <section class="admin-panel reminder-panel"><div class="panel-heading"><div><h2>Follow-up reminders</h2><p>Upcoming, due today, and overdue · East Africa Time</p></div><button class="text-button" type="button" data-open-due>View due requests</button></div><div id="followUpRows" class="reminder-list"></div><p id="followUpsEmpty" class="empty-state" hidden>No active follow-up reminders.</p></section>
+          <section class="admin-panel attention-panel"><div class="panel-heading"><div><h2>Quotes needing attention</h2><p>New requests and requests with a due follow-up</p></div></div><div id="attentionRows" class="reminder-list"></div><p id="attentionEmpty" class="empty-state" hidden>No quotes currently need attention.</p></section>
           <section class="admin-panel" aria-labelledby="recentTitle">
             <div class="panel-heading"><div><h2 id="recentTitle">Recent quote requests</h2><p>Latest enquiries from healthcare facilities</p></div><button class="text-button" type="button" data-open-quotes>View all <span aria-hidden="true">→</span></button></div>
             <div class="table-scroll"><table class="admin-table"><thead><tr><th>Reference</th><th>Customer</th><th>Facility</th><th>County</th><th>Status</th><th>Date received</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="recentRows"></tbody></table></div>
@@ -73,8 +77,12 @@
           </div>
           <section class="admin-panel quote-list-panel">
             <div class="quote-toolbar">
-              <label class="search-control"><span class="sr-only">Search quote requests</span><span aria-hidden="true">⌕</span><input id="quoteSearch" type="search" maxlength="120" placeholder="Search name, facility, email or reference" /></label>
-              <label class="status-filter"><span class="sr-only">Filter by status</span><select id="statusFilter"><option value="all">All statuses</option><option value="new">New</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label>
+              <label class="search-control"><span class="sr-only">Search quote requests</span><span aria-hidden="true">⌕</span><input id="quoteSearch" type="search" maxlength="120" placeholder="Search customer, company, email or reference" /></label>
+              <label class="status-filter"><span class="sr-only">Filter by status</span><select id="statusFilter"><option value="all">All statuses</option><option value="new">New</option><option value="in_progress">In progress</option><option value="completed">Completed</option><option value="won">Won</option><option value="lost">Lost</option></select></label>
+              <label class="date-filter">From<input id="dateFromFilter" type="date" aria-label="Submitted from date" /></label>
+              <label class="date-filter">To<input id="dateToFilter" type="date" aria-label="Submitted to date" /></label>
+              <label class="followup-filter"><input id="followUpFilter" type="checkbox" /> Due / overdue</label>
+              <button id="clearFilters" class="admin-button" type="button">Clear filters</button>
             </div>
             <div class="table-scroll"><table class="admin-table"><thead><tr><th>Reference</th><th>Customer</th><th>Facility</th><th>County</th><th>Status</th><th>Date received</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="quoteRows"></tbody></table></div>
             <p id="quotesEmpty" class="empty-state" hidden>No quote requests match these filters.</p>
@@ -82,6 +90,13 @@
           </section>
         </section>
 
+        <section id="documentsView" class="admin-view" aria-labelledby="documentsTitle" hidden>
+          <div class="page-heading"><div><span class="page-eyebrow">DOCUMENTS</span><h1 id="documentsTitle">Invoice templates</h1><p>Download branded templates and fill in confirmed transaction details.</p></div></div>
+          <section class="admin-panel documents-panel"><div class="document-downloads">
+            <article class="document-card"><span class="document-type">DOCX</span><h2>Editable invoice template</h2><p>Open in Microsoft Word or a compatible editor and replace the bracketed placeholders.</p><a class="admin-button admin-button-primary" href="/api/admin/documents/invoice-template.docx" download>Download Word template</a></article>
+            <article class="document-card"><span class="document-type">PDF</span><h2>Printable invoice template</h2><p>Print or use as a reference. Complete the transaction fields before issuing.</p><a class="admin-button admin-button-primary" href="/api/admin/documents/invoice-template.pdf" download>Download PDF template</a></article>
+          </div><p class="document-reminder">Payment, tax, and address fields remain editable placeholders until verified business details are supplied.</p></section>
+        </section>
         <section id="usersView" class="admin-view" aria-labelledby="usersTitle" hidden>
           <div class="page-heading">
             <div><span class="page-eyebrow">ACCESS CONTROL</span><h1 id="usersTitle">Admin accounts</h1><p>Create and manage additional administrator access.</p></div>
@@ -120,7 +135,9 @@
       </div>
       <section class="detail-section"><h3>Requested items</h3><ul id="detailItems" class="detail-items"></ul></section>
       <section class="detail-section"><h3>Additional requirements</h3><p id="detailRequirements" class="requirements-text"></p></section>
-      <form id="statusForm" class="status-editor"><label for="detailStatus">Update request status</label><div><select id="detailStatus"><option value="received">New</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select><button id="saveStatus" class="admin-button admin-button-primary" type="submit">Save status</button></div></form>
+      <section class="detail-section"><h3>Private internal notes</h3><div id="privateNotesList" class="private-notes-list"></div><form id="privateNoteForm" class="private-note-form"><label for="privateNoteInput">Add internal note</label><textarea id="privateNoteInput" maxlength="5000" rows="3" required></textarea><button class="admin-button admin-button-primary" type="submit">Save private note</button></form></section>
+      <section class="detail-section"><h3>Follow-up reminder</h3><div class="follow-up-editor"><label>Follow-up date<input id="followUpDate" type="date" /></label><label>Private reminder note<input id="followUpNote" type="text" maxlength="1000" /></label><label class="follow-up-done"><input id="followUpCompleted" type="checkbox" /> Completed</label><button id="saveFollowUp" class="admin-button admin-button-primary" type="button">Save reminder</button></div></section>
+      <form id="statusForm" class="status-editor"><label for="detailStatus">Update request status</label><div><select id="detailStatus"><option value="received">New</option><option value="in_progress">In progress</option><option value="completed">Completed</option><option value="won">Won</option><option value="lost">Lost</option></select><button id="saveStatus" class="admin-button admin-button-primary" type="submit">Save status</button></div></form>
     </div>
   </dialog>
   <dialog id="adminUserDialog" class="detail-dialog admin-user-dialog" aria-labelledby="adminUserDialogTitle">

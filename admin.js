@@ -1,7 +1,7 @@
 (() => {
   const API = '/api/admin';
   const state = {
-    csrfToken: '', page: 1, pageSize: 20, total: 0, search: '', status: 'all', currentReference: '', isPrimary: false,
+    csrfToken: '', page: 1, pageSize: 20, total: 0, search: '', status: 'all', dateFrom: '', dateTo: '', followUp: 'all', currentReference: '', isPrimary: false, username: '',
     quoteDialogScrollY: 0, quoteDialogOriginalStyle: null, quoteDialogOriginalStyleCaptured: false,
     quoteDialogViewport: null, quoteDialogViewportSync: null
   };
@@ -56,11 +56,13 @@
     if (!status || status === 'received' || status === 'new') return 'New';
     if (status === 'in_progress') return 'In progress';
     if (status === 'completed') return 'Completed';
+    if (status === 'won') return 'Won';
+    if (status === 'lost') return 'Lost';
     return status;
   }
 
   function statusClass(status) {
-    if (status === 'in_progress' || status === 'completed') return status;
+    if (status === 'in_progress' || status === 'completed' || status === 'won' || status === 'lost') return status;
     if (!status || status === 'received' || status === 'new') return 'new';
     return 'other';
   }
@@ -69,7 +71,20 @@
     if (!value) return '—';
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '—';
-    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Africa/Nairobi' }).format(date);
+  }
+
+  function nairobiToday() {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Nairobi', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+  }
+
+  function followUpLabel(date) {
+    if (!date) return '';
+    if (date < nairobiToday()) return 'Overdue';
+    if (date === nairobiToday()) return 'Due today';
+    return 'Upcoming';
   }
 
   function addCell(row, value, className) {
@@ -102,6 +117,32 @@
     detailsButton.type = 'button';
     detailsButton.addEventListener('click', () => openQuote(quote.reference));
     actionCell.append(detailsButton);
+    const quickStatus = document.createElement('select');
+    quickStatus.className = 'row-status-select';
+    quickStatus.setAttribute('aria-label', `Update status for ${quote.reference}`);
+    [['received', 'New'], ['in_progress', 'In progress'], ['completed', 'Completed'], ['won', 'Won'], ['lost', 'Lost']].forEach(([value, label]) => {
+      const option = makeElement('option', '', label);
+      option.value = value;
+      quickStatus.append(option);
+    });
+    quickStatus.value = ['received', 'new', 'in_progress', 'completed', 'won', 'lost'].includes(quote.status)
+      ? (quote.status === 'new' ? 'received' : quote.status)
+      : 'received';
+    quickStatus.addEventListener('change', async () => {
+      const previousStatus = ['received', 'new', 'in_progress', 'completed', 'won', 'lost'].includes(quote.status)
+        ? (quote.status === 'new' ? 'received' : quote.status)
+        : 'received';
+      quickStatus.disabled = true;
+      try {
+        await api(`/quotes/${encodeURIComponent(quote.reference)}/status`, { method: 'PATCH', body: JSON.stringify({ status: quickStatus.value }) });
+        showNotice('Quote status updated.');
+        await Promise.all([loadOverview(), loadQuotes()]);
+      } catch (error) {
+        quickStatus.value = previousStatus;
+        showNotice(error.message, true);
+      } finally { quickStatus.disabled = false; }
+    });
+    actionCell.append(quickStatus);
     row.append(actionCell);
     tbody.append(row);
   }
@@ -119,15 +160,70 @@
     byId('totalCount').textContent = data.total;
     byId('newCount').textContent = data.new;
     byId('progressCount').textContent = data.in_progress;
-    byId('completedCount').textContent = data.completed;
+    byId('wonCount').textContent = data.won || 0;
+    byId('followUpCount').textContent = data.follow_up_due || 0;
     renderRecent(data.recent || []);
+    renderAttention(data.attention || []);
+    renderFollowUps(data.follow_ups || []);
+  }
+
+  function renderAttention(quotes) {
+    const host = byId('attentionRows');
+    host.replaceChildren();
+    byId('attentionEmpty').hidden = quotes.length > 0;
+    quotes.forEach((quote) => host.append(makeReminderRow(quote, false)));
+  }
+
+  function makeReminderRow(quote, withReminder) {
+    const row = makeElement('article', 'reminder-row');
+    const main = makeElement('div', 'reminder-main');
+    const title = makeElement('button', 'reference-link', `${quote.reference} · ${quote.name}`);
+    title.type = 'button';
+    title.addEventListener('click', () => openQuote(quote.reference));
+    main.append(title);
+    main.append(makeElement('span', '', `${quote.facility || ''} · ${displayStatus(quote.status)}`));
+    if (withReminder) {
+      const flag = makeElement('span', `reminder-flag ${followUpLabel(quote.follow_up_date).toLowerCase().replace(' ', '-')}`, `${followUpLabel(quote.follow_up_date)} · ${quote.follow_up_date}`);
+      main.append(flag);
+      if (quote.follow_up_note) main.append(makeElement('span', 'reminder-note', quote.follow_up_note));
+    } else if (quote.follow_up_date && !quote.follow_up_completed && quote.follow_up_date <= nairobiToday()) {
+      main.append(makeElement('span', 'reminder-flag overdue', `Follow-up ${followUpLabel(quote.follow_up_date).toLowerCase()}`));
+    }
+    row.append(main);
+    if (withReminder) {
+      const complete = makeElement('button', 'admin-button reminder-complete', 'Mark complete');
+      complete.type = 'button';
+      complete.addEventListener('click', async () => {
+        complete.disabled = true;
+        try {
+          await api(`/follow-ups/${encodeURIComponent(quote.reference)}`, { method: 'PATCH', body: JSON.stringify({ completed: true }) });
+          await loadOverview();
+        } catch (error) { showNotice(error.message, true); complete.disabled = false; }
+      });
+      row.append(complete);
+    }
+    return row;
+  }
+
+  function renderFollowUps(quotes) {
+    const host = byId('followUpRows');
+    host.replaceChildren();
+    byId('followUpsEmpty').hidden = quotes.length > 0;
+    quotes.forEach((quote) => host.append(makeReminderRow(quote, true)));
   }
 
   async function loadQuotes() {
     clearNotice();
-    const query = new URLSearchParams({ page: String(state.page), search: state.search, status: state.status });
+    const query = new URLSearchParams({ page: String(state.page), search: state.search, status: state.status, follow_up: state.followUp });
+    if (state.dateFrom) query.set('date_from', state.dateFrom);
+    if (state.dateTo) query.set('date_to', state.dateTo);
     const data = await api(`/quotes?${query.toString()}`);
     state.total = data.total;
+    const maxPage = Math.max(1, Math.ceil(state.total / state.pageSize));
+    if (state.page > maxPage) {
+      state.page = maxPage;
+      return loadQuotes();
+    }
     const tbody = byId('quoteRows');
     tbody.replaceChildren();
     (data.items || []).forEach((quote) => appendQuoteRow(tbody, quote));
@@ -165,6 +261,49 @@
       row.append(actionCell);
       tbody.append(row);
     });
+  }
+
+  async function loadPrivateNotes(reference) {
+    const data = await api(`/quotes/${encodeURIComponent(reference)}/notes`);
+    const host = byId('privateNotesList');
+    host.replaceChildren();
+    (data.notes || []).forEach((note) => {
+      const card = makeElement('article', 'private-note');
+      const header = makeElement('div', 'private-note-header');
+      header.append(makeElement('strong', '', note.author));
+      header.append(makeElement('time', '', formatDate(note.created_at)));
+      if (note.updated_at && note.updated_at !== note.created_at) {
+        header.append(makeElement('time', '', `Edited ${formatDate(note.updated_at)}`));
+      }
+      card.append(header);
+      card.append(makeElement('p', '', note.content));
+      if (state.isPrimary || note.author === state.username) {
+        const actions = makeElement('div', 'private-note-actions');
+        const edit = makeElement('button', 'text-button', 'Edit');
+        edit.type = 'button';
+        edit.addEventListener('click', async () => {
+          const updated = window.prompt('Edit private note', note.content);
+          if (updated === null) return;
+          try {
+            await api(`/notes/${encodeURIComponent(note.id)}`, { method: 'PATCH', body: JSON.stringify({ content: updated }) });
+            await loadPrivateNotes(reference);
+          } catch (error) { showNotice(error.message, true); }
+        });
+        const remove = makeElement('button', 'text-button danger-text', 'Delete');
+        remove.type = 'button';
+        remove.addEventListener('click', async () => {
+          if (!window.confirm('Delete this private note?')) return;
+          try {
+            await api(`/notes/${encodeURIComponent(note.id)}`, { method: 'DELETE' });
+            await loadPrivateNotes(reference);
+          } catch (error) { showNotice(error.message, true); }
+        });
+        actions.append(edit, remove);
+        card.append(actions);
+      }
+      host.append(card);
+    });
+    if (!data.notes || !data.notes.length) host.append(makeElement('p', 'empty-note', 'No private notes yet.'));
   }
 
   function syncQuoteDialogToVisualViewport(dialog) {
@@ -230,6 +369,7 @@
     const overview = name === 'overview';
     byId('overviewView').hidden = name !== 'overview';
     byId('quotesView').hidden = name !== 'quotes';
+    byId('documentsView').hidden = name !== 'documents';
     byId('usersView').hidden = name !== 'users';
     document.querySelectorAll('[data-admin-view]').forEach((button) => {
       button.classList.toggle('active', button.dataset.adminView === name);
@@ -238,7 +378,7 @@
     byId('sidebarToggle').setAttribute('aria-expanded', 'false');
     if (overview) loadOverview().catch((error) => showNotice(error.message, true));
     else if (name === 'quotes') loadQuotes().catch((error) => showNotice(error.message, true));
-    else loadAdminUsers().catch((error) => showNotice(error.message, true));
+    else if (name === 'users') loadAdminUsers().catch((error) => showNotice(error.message, true));
   }
 
   async function openQuote(reference) {
@@ -262,6 +402,9 @@
       byId('detailEmail').textContent = quote.email || '—';
       byId('detailDate').textContent = formatDate(quote.created_at);
       byId('detailRequirements').textContent = quote.requirements || 'No additional requirements provided.';
+      byId('followUpDate').value = quote.follow_up_date || '';
+      byId('followUpNote').value = quote.follow_up_note || '';
+      byId('followUpCompleted').checked = Boolean(quote.follow_up_completed);
       const itemList = byId('detailItems');
       itemList.replaceChildren();
       const items = Array.isArray(quote.items) ? quote.items : [];
@@ -270,7 +413,8 @@
       } else {
         itemList.append(makeElement('li', '', 'General catalogue and procurement inquiry'));
       }
-      byId('detailStatus').value = ['received', 'new', 'in_progress', 'completed'].includes(quote.status) ? (quote.status === 'new' ? 'received' : quote.status) : 'received';
+      byId('detailStatus').value = ['received', 'new', 'in_progress', 'completed', 'won', 'lost'].includes(quote.status) ? (quote.status === 'new' ? 'received' : quote.status) : 'received';
+      await loadPrivateNotes(quote.reference);
       byId('detailLoading').hidden = true;
       byId('detailContent').hidden = false;
     } catch (error) {
@@ -313,6 +457,7 @@
       const session = await api('/session');
       state.csrfToken = session.csrfToken;
       state.isPrimary = Boolean(session.isPrimary);
+      state.username = session.username;
       byId('adminUsersNav').hidden = !state.isPrimary;
       byId('adminUsernameLabel').textContent = session.username;
       await loadOverview();
@@ -325,6 +470,12 @@
       button.addEventListener('click', () => showView(button.dataset.adminView));
     });
     document.querySelectorAll('[data-open-quotes]').forEach((button) => button.addEventListener('click', () => showView('quotes')));
+    document.querySelectorAll('[data-open-due]').forEach((button) => button.addEventListener('click', () => {
+      state.followUp = 'due';
+      byId('followUpFilter').checked = true;
+      state.page = 1;
+      showView('quotes');
+    }));
     byId('sidebarToggle').addEventListener('click', () => {
       const sidebar = byId('adminSidebar');
       const open = sidebar.classList.toggle('open');
@@ -344,6 +495,36 @@
       state.page = 1;
       loadQuotes().catch((error) => showNotice(error.message, true));
     });
+    const applyDateFilters = () => {
+      state.dateFrom = byId('dateFromFilter').value;
+      state.dateTo = byId('dateToFilter').value;
+      state.page = 1;
+      loadQuotes().catch((error) => showNotice(error.message, true));
+    };
+    byId('dateFromFilter').addEventListener('change', applyDateFilters);
+    byId('dateToFilter').addEventListener('change', applyDateFilters);
+    byId('followUpFilter').addEventListener('change', () => {
+      state.followUp = byId('followUpFilter').checked ? 'due' : 'all';
+      state.page = 1;
+      loadQuotes().catch((error) => showNotice(error.message, true));
+    });
+    byId('followUpDate').addEventListener('change', () => {
+      byId('followUpCompleted').checked = false;
+    });
+    byId('clearFilters').addEventListener('click', () => {
+      state.search = '';
+      state.status = 'all';
+      state.dateFrom = '';
+      state.dateTo = '';
+      state.followUp = 'all';
+      state.page = 1;
+      byId('quoteSearch').value = '';
+      byId('statusFilter').value = 'all';
+      byId('dateFromFilter').value = '';
+      byId('dateToFilter').value = '';
+      byId('followUpFilter').checked = false;
+      loadQuotes().catch((error) => showNotice(error.message, true));
+    });
     byId('previousPage').addEventListener('click', () => {
       if (state.page > 1) { state.page -= 1; loadQuotes().catch((error) => showNotice(error.message, true)); }
     });
@@ -358,6 +539,29 @@
     quoteDialog.addEventListener('close', () => {
       restoreQuoteDialogViewport(quoteDialog);
       window.requestAnimationFrame(() => window.scrollTo(0, state.quoteDialogScrollY));
+    });
+    byId('privateNoteForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const input = byId('privateNoteInput');
+      try {
+        await api(`/quotes/${encodeURIComponent(state.currentReference)}/notes`, { method: 'POST', body: JSON.stringify({ content: input.value }) });
+        input.value = '';
+        await loadPrivateNotes(state.currentReference);
+        showNotice('Private note saved.');
+      } catch (error) { showNotice(error.message, true); }
+    });
+    byId('saveFollowUp').addEventListener('click', async () => {
+      const date = byId('followUpDate').value;
+      const completed = byId('followUpCompleted').checked;
+      if (!date && !completed) { showNotice('Choose a follow-up date or mark the reminder complete.', true); return; }
+      try {
+        await api(`/follow-ups/${encodeURIComponent(state.currentReference)}`, {
+          method: 'PATCH', body: JSON.stringify({ date: date || null, note: byId('followUpNote').value, completed })
+        });
+        showNotice('Follow-up reminder saved.');
+        await loadOverview();
+        await loadQuotes();
+      } catch (error) { showNotice(error.message, true); }
     });
     if (state.isPrimary) {
       byId('createAdminUserForm').addEventListener('submit', async (event) => {

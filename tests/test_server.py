@@ -7,10 +7,11 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import server
 
@@ -131,7 +132,7 @@ class ServerTests(unittest.TestCase):
             status, body, _ = self.request('GET', '/api/admin/quotes?search=Clinic&status=in_progress&page=2', headers=auth_headers)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)['page'], 2)
-        listing.assert_called_once_with('Clinic', 'in_progress', 2)
+        listing.assert_called_once_with('Clinic', 'in_progress', 2, date_from=None, date_to=None, follow_up='all')
         with patch.object(server, 'get_admin_quote', return_value={'reference': 'ALIPEN-ABC123', 'items': []}):
             status, body, _ = self.request('GET', '/api/admin/quotes/ALIPEN-ABC123', headers=auth_headers)
         self.assertEqual(status, 200)
@@ -145,12 +146,182 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)['quote']['status'], 'completed')
         update.assert_called_once_with('ALIPEN-ABC123', 'completed')
+        with patch.object(server, 'update_admin_quote_status') as invalid_update:
+            status, _, _ = self.request('PATCH', '/api/admin/quotes/ALIPEN-ABC123/status', {'status': {'unexpected': True}}, {
+                **auth_headers, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf,
+            })
+            self.assertEqual(status, 422)
+            invalid_update.assert_not_called()
         status, _, _ = self.request('POST', '/api/admin/logout', {}, {
             **auth_headers, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf,
         })
         self.assertEqual(status, 200)
         status, _, _ = self.request('GET', '/api/admin/overview', headers=auth_headers)
         self.assertEqual(status, 401)
+
+    def test_dashboard_counts_use_database_aggregates_and_followups(self):
+        connection = FakeConnection()
+        connection.fetchone_result = (12, 4, 3, 1, 2, 2)
+        connection.fetchall_result = []
+        server.psycopg = SimpleNamespace(connect=lambda *args, **kwargs: connection)
+        overview = server.get_admin_overview()
+        sql = '\n'.join(statement for statement, _ in connection.statements)
+        self.assertEqual((overview['total'], overview['new'], overview['in_progress'], overview['won'], overview['follow_up_due']), (12, 4, 3, 2, 2))
+        self.assertIn("status = 'won'", sql)
+        self.assertIn('follow_up_date <= %s', sql)
+        self.assertIn('ORDER BY created_at DESC', sql)
+        self.assertEqual(overview['recent'], [])
+        self.assertEqual(overview['attention'], [])
+        self.assertEqual(overview['follow_ups'], [])
+
+    def test_admin_quote_date_status_search_and_followup_filters(self):
+        status, body, headers = self.admin_login()
+        cookie = headers.get('Set-Cookie').split(';', 1)[0]
+        with patch.object(server, 'list_admin_quotes', return_value={'items': [], 'total': 0, 'page': 1, 'pageSize': 20}) as listing:
+            status, _, _ = self.request('GET', '/api/admin/quotes?search=buyer%40example.com&status=won&date_from=2026-01-01&date_to=2026-01-31&follow_up=due', headers={'Cookie': cookie})
+        self.assertEqual(status, 200)
+        listing.assert_called_once_with('buyer@example.com', 'won', 1, date_from=datetime(2026, 1, 1).date(), date_to=datetime(2026, 1, 31).date(), follow_up='due')
+        status, _, _ = self.request('GET', '/api/admin/quotes?date_from=2026-02-01&date_to=2026-01-01', headers={'Cookie': cookie})
+        self.assertEqual(status, 400)
+
+    def test_quote_filter_database_query_applies_search_dates_status_and_pagination(self):
+        connection = FakeConnection()
+        connection.fetchone_result = (41,)
+        connection.fetchall_result = []
+        server.psycopg = SimpleNamespace(connect=lambda *args, **kwargs: connection)
+        result = server.list_admin_quotes(
+            'Clinic', 'won', 3, date_from=datetime(2026, 3, 1).date(),
+            date_to=datetime(2026, 3, 31).date(), follow_up='due', page_size=20,
+        )
+        self.assertEqual(result['total'], 41)
+        count_sql, count_params = connection.statements[0]
+        self.assertIn('reference ILIKE', count_sql)
+        self.assertIn('facility ILIKE', count_sql)
+        self.assertIn("status = %s", count_sql)
+        self.assertIn('follow_up_date <= %s AND follow_up_completed = FALSE', count_sql)
+        self.assertEqual(count_params[:5], ('%Clinic%',) * 4 + ('won',))
+        self.assertEqual(count_params[5], datetime(2026, 3, 1, tzinfo=server.BUSINESS_TIMEZONE))
+        self.assertEqual(count_params[6], datetime(2026, 4, 1, tzinfo=server.BUSINESS_TIMEZONE))
+        self.assertEqual(count_params[7], datetime.now(server.BUSINESS_TIMEZONE).date())
+        self.assertEqual(connection.statements[1][1][-2:], (20, 40))
+
+    def test_private_quote_notes_are_authenticated_csrf_protected_and_not_public(self):
+        status, body, headers = self.admin_login()
+        self.assertEqual(status, 200)
+        cookie = headers.get('Set-Cookie').split(';', 1)[0]
+        csrf = json.loads(body)['csrfToken']
+        note = {'id': 9, 'author': 'unit-admin', 'content': 'Private pricing follow-up', 'created_at': '2026-11-24T10:00:00+00:00', 'updated_at': '2026-11-24T10:00:00+00:00'}
+        with patch.object(server, 'create_quote_note', return_value=note) as create, patch.object(server, 'list_quote_notes', return_value=[note]) as listing:
+            status, _, _ = self.request('POST', '/api/admin/quotes/ALIPEN-ABC123/notes', {'content': note['content']}, {
+                'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf,
+            })
+            self.assertEqual(status, 201)
+            create.assert_called_once_with('ALIPEN-ABC123', 'unit-admin', note['content'])
+            status, body, _ = self.request('GET', '/api/admin/quotes/ALIPEN-ABC123/notes', headers={'Cookie': cookie})
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)['notes'][0]['content'], note['content'])
+            listing.assert_called_once_with('ALIPEN-ABC123')
+        status, _, _ = self.request('GET', '/api/admin/quotes/ALIPEN-ABC123/notes')
+        self.assertEqual(status, 401)
+        status, _, _ = self.request('POST', '/api/admin/quotes/ALIPEN-ABC123/notes', {'content': 'No token'}, {'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}'})
+        self.assertEqual(status, 403)
+        self.assertNotIn('Private pricing follow-up', server.format_items([])[0])
+
+    def test_private_note_text_is_not_added_to_customer_quote_email(self):
+        server.RESEND_API_KEY = 'test-key'
+        server.MAIL_FROM = 'Alipen <quotes@example.com>'
+        server.ADMIN_EMAIL = 'admin@example.com'
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = b'{}'
+        response.__enter__.return_value = response
+        with patch('urllib.request.urlopen', return_value=response) as send:
+            server.send_quote_emails({
+                'name': 'Buyer', 'facility': 'Clinic', 'county': 'Nairobi', 'phone': '0712000000',
+                'email': 'buyer@example.com', 'items': [], 'requirements': 'Please quote',
+                'private_note': 'INTERNAL ONLY - do not include',
+            }, 'ALIPEN-ABC123')
+        email_payloads = [json.loads(call.args[0].data) for call in send.call_args_list]
+        self.assertEqual(len(email_payloads), 2)
+        self.assertNotIn('INTERNAL ONLY', json.dumps(email_payloads))
+
+    def test_note_author_can_edit_and_delete_with_csrf(self):
+        status, body, headers = self.admin_login()
+        cookie = headers.get('Set-Cookie').split(';', 1)[0]
+        csrf = json.loads(body)['csrfToken']
+        auth = {'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf}
+        existing = {'id': 12, 'author': 'unit-admin', 'content': 'Original', 'created_at': '2026-11-24T10:00:00+00:00', 'updated_at': '2026-11-24T10:00:00+00:00'}
+        changed = {**existing, 'content': 'Revised'}
+        with patch.object(server, 'get_quote_note', return_value=existing), patch.object(server, 'update_quote_note', return_value=changed) as edit:
+            status, body, _ = self.request('PATCH', '/api/admin/notes/12', {'content': 'Revised'}, auth)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['note']['content'], 'Revised')
+        edit.assert_called_once_with(12, 'Revised')
+        with patch.object(server, 'get_quote_note', return_value=existing), patch.object(server, 'delete_quote_note', return_value=True) as delete:
+            status, _, _ = self.request('DELETE', '/api/admin/notes/12', headers=auth)
+        self.assertEqual(status, 200)
+        delete.assert_called_once_with(12)
+
+    def test_followup_create_complete_and_reschedule_require_csrf(self):
+        status, body, headers = self.admin_login()
+        cookie = headers.get('Set-Cookie').split(';', 1)[0]
+        csrf = json.loads(body)['csrfToken']
+        auth = {'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf}
+        results = [
+            {'reference': 'ALIPEN-ABC123', 'date': '2026-12-01', 'note': 'Call buyer', 'completed': False},
+            {'reference': 'ALIPEN-ABC123', 'date': '2026-12-01', 'note': 'Call buyer', 'completed': True},
+            {'reference': 'ALIPEN-ABC123', 'date': '2026-12-05', 'note': 'Call buyer', 'completed': False},
+        ]
+        with patch.object(server, 'update_follow_up', side_effect=results) as update:
+            for payload in (
+                {'date': '2026-12-01', 'note': 'Call buyer', 'completed': False},
+                {'completed': True},
+                {'date': '2026-12-05', 'note': 'Call buyer', 'completed': False},
+            ):
+                status, _, _ = self.request('PATCH', '/api/admin/follow-ups/ALIPEN-ABC123', payload, auth)
+                self.assertEqual(status, 200)
+        self.assertEqual(update.call_count, 3)
+        status, _, _ = self.request('PATCH', '/api/admin/follow-ups/ALIPEN-ABC123', {'date': 'not-a-date'}, auth)
+        self.assertEqual(status, 422)
+
+    def test_invoice_templates_are_valid_and_download_only_after_admin_auth(self):
+        for extension, mime in (('docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'), ('pdf', 'application/pdf')):
+            path, expected_mime = server.INVOICE_TEMPLATES[extension]
+            self.assertTrue(path.is_file())
+            self.assertEqual(expected_mime, mime)
+        with zipfile.ZipFile(server.INVOICE_TEMPLATES['docx'][0]) as docx:
+            docx.testzip()
+            self.assertIn('word/document.xml', docx.namelist())
+            self.assertIn('word/media/logo.png', docx.namelist())
+            xml = docx.read('word/document.xml')
+            self.assertIn(b'Invoice number', xml)
+            self.assertIn(b'Authorized by', xml)
+            for name in docx.namelist():
+                if name.endswith(('.xml', '.rels')):
+                    import xml.etree.ElementTree as ET
+                    ET.fromstring(docx.read(name))
+        pdf = server.INVOICE_TEMPLATES['pdf'][0].read_bytes()
+        self.assertTrue(pdf.startswith(b'%PDF-1.4'))
+        self.assertTrue(pdf.rstrip().endswith(b'%%EOF'))
+        self.assertIn(b'PAYMENT INSTRUCTIONS', pdf)
+        xref_offset = int(pdf.rsplit(b'startxref\n', 1)[1].splitlines()[0])
+        self.assertEqual(pdf[xref_offset:xref_offset + 4], b'xref')
+        xref_lines = pdf[xref_offset:].splitlines()
+        object_count = int(xref_lines[1].split()[1])
+        for number, entry in enumerate(xref_lines[3:3 + object_count - 1], start=1):
+            if entry.endswith(b' n '):
+                offset = int(entry[:10])
+                self.assertTrue(pdf[offset:].startswith(f'{number} 0 obj'.encode('ascii')))
+        status, _, _ = self.request('GET', '/api/admin/documents/invoice-template.pdf')
+        self.assertEqual(status, 401)
+        status, body, headers = self.admin_login()
+        cookie = headers.get('Set-Cookie').split(';', 1)[0]
+        for extension, mime in (('docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'), ('pdf', 'application/pdf')):
+            status, downloaded, response_headers = self.request('GET', f'/api/admin/documents/invoice-template.{extension}', headers={'Cookie': cookie})
+            self.assertEqual(status, 200)
+            self.assertEqual(response_headers.get('Content-Type'), mime)
+            self.assertIn('attachment', response_headers.get('Content-Disposition'))
+            self.assertTrue(downloaded)
 
     def test_secondary_admin_authenticates_but_cannot_manage_other_accounts(self):
         from argon2 import PasswordHasher
@@ -314,6 +485,10 @@ class ServerTests(unittest.TestCase):
         self.assertIn('CREATE TABLE IF NOT EXISTS quote_requests', self.db_connections[0].statements[0][0])
         self.assertTrue(any('CREATE TABLE IF NOT EXISTS admin_users' in statement for statement, _ in self.db_connections[0].statements))
         self.assertTrue(any('CREATE UNIQUE INDEX IF NOT EXISTS admin_users_username_lower_unique' in statement for statement, _ in self.db_connections[0].statements))
+        migration_sql = '\n'.join(statement for statement, _ in self.db_connections[0].statements)
+        self.assertIn('ADD COLUMN IF NOT EXISTS follow_up_date', migration_sql)
+        self.assertIn('CREATE TABLE IF NOT EXISTS quote_notes', migration_sql)
+        self.assertIn('quote_requests_follow_up_idx', migration_sql)
 
     def test_admin_user_database_helpers_return_only_safe_fields(self):
         created_at = datetime.now(timezone.utc)
@@ -352,6 +527,7 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(body.startswith(b'\x89PNG'))
         for path in ('/server.py', '/.env', '/.env.example', '/requirements.txt', '/README.md',
                      '/alipen_quotes.db', '/brand-assets/Logo.jpeg', '/__pycache__/server.pyc',
+                     '/private_documents/alipen-invoice-template.pdf',
                      '/public/../server.py', '/%2e%2e/server.py'):
             with self.subTest(path=path):
                 status, _, _ = self.request('GET', path)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Alipen Solutions Agency Ltd website and quote-request service."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import http.server
 import json
 import html
@@ -20,6 +20,7 @@ from hashlib import sha256
 from email.utils import parseaddr
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 try:
     import psycopg
@@ -81,9 +82,17 @@ STATIC_ROOT_FILES = {
     'admin.css', 'admin.js', 'admin-diagnostics-loader.js', 'admin-diagnostics.js',
 }
 ADMIN_STATUSES = {'received', 'in_progress', 'completed'}
+ADMIN_STATUSES.update({'won', 'lost'})
+BUSINESS_TIMEZONE = ZoneInfo('Africa/Nairobi')
+INVOICE_TEMPLATES = {
+    'docx': (DIRECTORY / 'private_documents' / 'alipen-invoice-template.docx',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+    'pdf': (DIRECTORY / 'private_documents' / 'alipen-invoice-template.pdf', 'application/pdf'),
+}
 ADMIN_QUOTE_COLUMNS = (
     'reference', 'name', 'facility', 'facility_type', 'county', 'phone',
     'email', 'items', 'requirements', 'status', 'created_at',
+    'follow_up_date', 'follow_up_note', 'follow_up_completed',
 )
 STATIC_EXTENSIONS = {
     '.html', '.css', '.js', '.png', '.jpg', '.jpeg', '.webp', '.gif',
@@ -143,6 +152,23 @@ def init_database():
             CREATE UNIQUE INDEX IF NOT EXISTS admin_users_username_lower_unique
             ON admin_users (LOWER(username))
         ''')
+        # Additive quote workflow fields; existing quote records and statuses remain intact.
+        conn.execute('ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS follow_up_date DATE')
+        conn.execute('ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS follow_up_note TEXT')
+        conn.execute('ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS follow_up_completed BOOLEAN NOT NULL DEFAULT FALSE')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS quote_notes (
+                id BIGSERIAL PRIMARY KEY,
+                quote_reference VARCHAR(20) NOT NULL REFERENCES quote_requests(reference) ON DELETE CASCADE,
+                author_username VARCHAR(120) NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS quote_requests_follow_up_idx ON quote_requests (follow_up_date) WHERE follow_up_completed = FALSE')
+        conn.execute('CREATE INDEX IF NOT EXISTS quote_requests_status_created_idx ON quote_requests (status, created_at DESC)')
+        conn.execute('CREATE INDEX IF NOT EXISTS quote_notes_reference_created_idx ON quote_notes (quote_reference, created_at)')
 
 
 def save_quote(data, ip_address):
@@ -408,36 +434,65 @@ def serialize_admin_quote(row):
     quote['items'] = items if isinstance(items, list) else []
     created_at = quote.get('created_at')
     quote['created_at'] = created_at.isoformat() if hasattr(created_at, 'isoformat') else created_at
+    follow_up_date = quote.get('follow_up_date')
+    quote['follow_up_date'] = follow_up_date.isoformat() if hasattr(follow_up_date, 'isoformat') else follow_up_date
     quote['status'] = quote.get('status') or 'received'
     return quote
 
 
 def get_admin_overview():
+    today = datetime.now(BUSINESS_TIMEZONE).date()
     with database_connection() as conn:
         row = conn.execute('''
             SELECT
                 COUNT(*) AS total,
                 COUNT(*) FILTER (WHERE status IS NULL OR status IN ('', 'new', 'received')) AS new,
                 COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress,
-                COUNT(*) FILTER (WHERE status = 'completed') AS completed
+                COUNT(*) FILTER (WHERE status = 'completed') AS completed,
+                COUNT(*) FILTER (WHERE status = 'won') AS won,
+                COUNT(*) FILTER (WHERE follow_up_date <= %s AND follow_up_completed = FALSE) AS follow_up_due
             FROM quote_requests
-        ''').fetchone()
+        ''', (today,)).fetchone()
         recent_rows = conn.execute(f'''
             SELECT {', '.join(ADMIN_QUOTE_COLUMNS)}
             FROM quote_requests
             ORDER BY created_at DESC NULLS LAST, id DESC
             LIMIT %s
         ''', (5,)).fetchall()
+        attention_rows = conn.execute(f'''
+            SELECT {', '.join(ADMIN_QUOTE_COLUMNS)}
+            FROM quote_requests
+            WHERE (status IS NULL OR status IN ('', 'new', 'received', 'in_progress'))
+               OR (follow_up_date <= %s AND follow_up_completed = FALSE)
+            ORDER BY CASE
+                         WHEN follow_up_date <= %s AND follow_up_completed = FALSE THEN 0
+                         WHEN status IS NULL OR status IN ('', 'new', 'received') THEN 1
+                         ELSE 2
+                     END,
+                     follow_up_date ASC NULLS LAST, created_at DESC NULLS LAST, id DESC
+            LIMIT %s
+        ''', (today, today, 5)).fetchall()
+        follow_up_rows = conn.execute(f'''
+            SELECT {', '.join(ADMIN_QUOTE_COLUMNS)}
+            FROM quote_requests
+            WHERE follow_up_date IS NOT NULL AND follow_up_completed = FALSE
+            ORDER BY follow_up_date ASC, created_at DESC NULLS LAST, id DESC
+            LIMIT %s
+        ''', (8,)).fetchall()
     return {
         'total': row[0],
         'new': row[1],
         'in_progress': row[2],
         'completed': row[3],
+        'won': row[4],
+        'follow_up_due': row[5],
         'recent': [serialize_admin_quote(item) for item in recent_rows],
+        'attention': [serialize_admin_quote(item) for item in attention_rows],
+        'follow_ups': [serialize_admin_quote(item) for item in follow_up_rows],
     }
 
 
-def list_admin_quotes(search='', status='all', page=1, page_size=20):
+def list_admin_quotes(search='', status='all', page=1, page_size=20, date_from=None, date_to=None, follow_up='all'):
     clauses = []
     params = []
     if search:
@@ -449,6 +504,18 @@ def list_admin_quotes(search='', status='all', page=1, page_size=20):
     elif status in ('in_progress', 'completed'):
         clauses.append('status = %s')
         params.append(status)
+    elif status in ('won', 'lost'):
+        clauses.append('status = %s')
+        params.append(status)
+    if date_from:
+        clauses.append('created_at >= %s')
+        params.append(datetime.combine(date_from, datetime.min.time(), BUSINESS_TIMEZONE))
+    if date_to:
+        clauses.append('created_at < %s')
+        params.append(datetime.combine(date_to + timedelta(days=1), datetime.min.time(), BUSINESS_TIMEZONE))
+    if follow_up == 'due':
+        clauses.append('follow_up_date <= %s AND follow_up_completed = FALSE')
+        params.append(datetime.now(BUSINESS_TIMEZONE).date())
 
     where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ''
     offset = (page - 1) * page_size
@@ -470,6 +537,79 @@ def get_admin_quote(reference):
             FROM quote_requests WHERE reference = %s LIMIT 1
         ''', (reference,)).fetchone()
     return serialize_admin_quote(row) if row else None
+
+
+def list_quote_notes(reference):
+    with database_connection() as conn:
+        rows = conn.execute('''
+            SELECT id, author_username, content, created_at, updated_at
+            FROM quote_notes WHERE quote_reference = %s ORDER BY created_at ASC, id ASC
+        ''', (reference,)).fetchall()
+    return [dict(id=row[0], author=row[1], content=row[2],
+                 created_at=row[3].isoformat() if hasattr(row[3], 'isoformat') else row[3],
+                 updated_at=row[4].isoformat() if hasattr(row[4], 'isoformat') else row[4]) for row in rows]
+
+
+def create_quote_note(reference, author, content):
+    with database_connection() as conn:
+        row = conn.execute('''
+            INSERT INTO quote_notes (quote_reference, author_username, content)
+            SELECT reference, %s, %s FROM quote_requests WHERE reference = %s
+            RETURNING id, author_username, content, created_at, updated_at
+        ''', (author, content, reference)).fetchone()
+    return dict(id=row[0], author=row[1], content=row[2],
+                created_at=row[3].isoformat() if hasattr(row[3], 'isoformat') else row[3],
+                updated_at=row[4].isoformat() if hasattr(row[4], 'isoformat') else row[4]) if row else None
+
+
+def update_quote_note(note_id, content):
+    with database_connection() as conn:
+        row = conn.execute('''
+            UPDATE quote_notes SET content = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s RETURNING id, author_username, content, created_at, updated_at
+        ''', (content, note_id)).fetchone()
+    return dict(id=row[0], author=row[1], content=row[2],
+                created_at=row[3].isoformat() if hasattr(row[3], 'isoformat') else row[3],
+                updated_at=row[4].isoformat() if hasattr(row[4], 'isoformat') else row[4]) if row else None
+
+
+def get_quote_note(note_id):
+    with database_connection() as conn:
+        row = conn.execute('''
+            SELECT id, author_username, content, created_at, updated_at
+            FROM quote_notes WHERE id = %s
+        ''', (note_id,)).fetchone()
+    return dict(id=row[0], author=row[1], content=row[2],
+                created_at=row[3].isoformat() if hasattr(row[3], 'isoformat') else row[3],
+                updated_at=row[4].isoformat() if hasattr(row[4], 'isoformat') else row[4]) if row else None
+
+
+def delete_quote_note(note_id):
+    with database_connection() as conn:
+        row = conn.execute('DELETE FROM quote_notes WHERE id = %s RETURNING id', (note_id,)).fetchone()
+    return bool(row)
+
+
+def update_follow_up(reference, follow_up_date, note=None, completed=None):
+    with database_connection() as conn:
+        row = conn.execute('''
+            UPDATE quote_requests
+            SET follow_up_date = COALESCE(%s, follow_up_date), follow_up_note = COALESCE(%s, follow_up_note),
+                follow_up_completed = COALESCE(%s, follow_up_completed)
+            WHERE reference = %s
+            RETURNING reference, follow_up_date, follow_up_note, follow_up_completed
+        ''', (follow_up_date, note, completed, reference)).fetchone()
+    return dict(reference=row[0], date=row[1].isoformat() if hasattr(row[1], 'isoformat') else row[1],
+                note=row[2], completed=row[3]) if row else None
+
+
+def valid_admin_note(value):
+    if not isinstance(value, str):
+        return None
+    content = value.strip()
+    if not content or len(content) > 5000:
+        return None
+    return content
 
 
 def update_admin_quote_status(reference, status):
@@ -869,6 +1009,13 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
             return
         self.send_json(404, {'success': False, 'message': 'Endpoint not found.'})
 
+    def do_DELETE(self):
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        if path.startswith('/api/admin/'):
+            self.handle_admin_api('DELETE', path, '')
+            return
+        self.send_error(404, 'Endpoint not found.')
+
     def request_is_same_origin(self):
         origin = self.headers.get('Origin', '').strip().rstrip('/')
         fetch_site = self.headers.get('Sec-Fetch-Site', '').lower()
@@ -904,7 +1051,7 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
         if content_length <= 0:
             self.send_json(400, {'success': False, 'message': 'Request body is required.'})
             return None
-        if content_length > 4096:
+        if content_length > 24 * 1024:
             self.send_json(413, {'success': False, 'message': 'Request is too large.'})
             return None
         try:
@@ -965,7 +1112,7 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(401, {'success': False, 'message': 'Admin authentication required.'})
             return
 
-        if method in ('POST', 'PATCH'):
+        if method in ('POST', 'PATCH', 'DELETE'):
             if not self.request_is_same_origin():
                 self.send_json(403, {'success': False, 'message': 'Request origin was rejected.'})
                 return
@@ -978,6 +1125,29 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
                 'authenticated': True, 'username': session['username'],
                 'isPrimary': session.get('is_primary', False), 'csrfToken': session['csrf_token'],
             })
+            return
+
+        if method == 'GET' and path.startswith('/api/admin/documents/'):
+            filename = path.rsplit('/', 1)[-1]
+            extension = filename.rsplit('.', 1)[-1] if '.' in filename else ''
+            template = INVOICE_TEMPLATES.get(extension)
+            if not template or filename != f'invoice-template.{extension}':
+                self.send_json(404, {'success': False, 'message': 'Document not found.'})
+                return
+            file_path, content_type = template
+            try:
+                content = file_path.read_bytes()
+            except OSError:
+                self.send_json(404, {'success': False, 'message': 'Document not found.'})
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(content)))
+            self.send_header('Content-Disposition', f'attachment; filename="{file_path.name}"')
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            if not getattr(self, '_head_only', False):
+                self.wfile.write(content)
             return
 
         if path == '/api/admin/users' or path.startswith('/api/admin/users/'):
@@ -1080,20 +1250,141 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
             params = urllib.parse.parse_qs(query_string, keep_blank_values=True)
             search = clean_text(params.get('search', [''])[0], 120)
             status = params.get('status', ['all'])[0]
-            if status not in ('all', 'new', 'in_progress', 'completed'):
+            follow_up = params.get('follow_up', ['all'])[0]
+            if status not in ('all', 'new', 'in_progress', 'completed', 'won', 'lost'):
                 self.send_json(400, {'success': False, 'message': 'Invalid status filter.'})
+                return
+            if follow_up not in ('all', 'due'):
+                self.send_json(400, {'success': False, 'message': 'Invalid follow-up filter.'})
                 return
             try:
                 page = int(params.get('page', ['1'])[0])
+                date_from_text = params.get('date_from', [''])[0]
+                date_to_text = params.get('date_to', [''])[0]
+                date_from = date.fromisoformat(date_from_text) if date_from_text else None
+                date_to = date.fromisoformat(date_to_text) if date_to_text else None
             except (TypeError, ValueError):
-                page = 0
-            if page < 1 or page > 1_000_000:
-                self.send_json(400, {'success': False, 'message': 'Invalid page number.'})
+                self.send_json(400, {'success': False, 'message': 'Invalid page or date filter.'})
+                return
+            if page < 1 or page > 1_000_000 or (date_from and date_to and date_from > date_to):
+                self.send_json(400, {'success': False, 'message': 'Invalid page or date range.'})
                 return
             try:
-                self.send_json(200, list_admin_quotes(search, status, page))
-            except Exception:
+                data = list_admin_quotes(search, status, page, date_from=date_from, date_to=date_to, follow_up=follow_up)
+                self.send_json(200, data)
+            except Exception as error:
+                logger.error('Admin quote list unavailable exception_type=%s', type(error).__name__)
                 self.send_json(503, {'success': False, 'message': 'Quote requests are temporarily unavailable.'})
+            return
+
+        if method == 'GET' and path.startswith('/api/admin/quotes/') and path.endswith('/notes'):
+            reference = path[len('/api/admin/quotes/'):-len('/notes')].strip('/')
+            if not reference or '/' in reference:
+                self.send_json(404, {'success': False, 'message': 'Quote request not found.'})
+                return
+            try:
+                self.send_json(200, {'notes': list_quote_notes(reference)})
+            except Exception as error:
+                logger.error('Admin note list unavailable exception_type=%s', type(error).__name__)
+                self.send_json(503, {'success': False, 'message': 'Private notes are temporarily unavailable.'})
+            return
+
+        if method == 'POST' and path.startswith('/api/admin/quotes/') and path.endswith('/notes'):
+            reference = path[len('/api/admin/quotes/'):-len('/notes')].strip('/')
+            if not reference or '/' in reference:
+                self.send_json(404, {'success': False, 'message': 'Quote request not found.'})
+                return
+            data = self.read_admin_json()
+            if data is None:
+                return
+            content = valid_admin_note(data.get('content'))
+            if not content:
+                self.send_json(422, {'success': False, 'message': 'Note must contain 1 to 5000 characters.'})
+                return
+            try:
+                note = create_quote_note(reference, session['username'], content)
+            except Exception as error:
+                logger.error('Admin note create failed exception_type=%s', type(error).__name__)
+                self.send_json(503, {'success': False, 'message': 'Private note could not be saved.'})
+                return
+            if not note:
+                self.send_json(404, {'success': False, 'message': 'Quote request not found.'})
+                return
+            self.send_json(201, {'note': note})
+            return
+
+        if method in ('PATCH', 'DELETE') and path.startswith('/api/admin/notes/'):
+            note_id_text = path[len('/api/admin/notes/'):]
+            if not note_id_text.isdecimal() or len(note_id_text) > 18:
+                self.send_json(404, {'success': False, 'message': 'Private note not found.'})
+                return
+            try:
+                existing_note = get_quote_note(int(note_id_text))
+            except Exception as error:
+                logger.error('Admin note lookup failed exception_type=%s', type(error).__name__)
+                self.send_json(503, {'success': False, 'message': 'Private note could not be updated.'})
+                return
+            if not existing_note:
+                self.send_json(404, {'success': False, 'message': 'Private note not found.'})
+                return
+            if existing_note['author'] != session['username'] and not session.get('is_primary'):
+                self.send_json(403, {'success': False, 'message': 'Only the note author or primary administrator may change this note.'})
+                return
+            if method == 'DELETE':
+                delete_quote_note(int(note_id_text))
+                self.send_json(200, {'success': True})
+                return
+            data = self.read_admin_json()
+            if data is None:
+                return
+            content = valid_admin_note(data.get('content'))
+            if not content:
+                self.send_json(422, {'success': False, 'message': 'Note must contain 1 to 5000 characters.'})
+                return
+            try:
+                self.send_json(200, {'note': update_quote_note(int(note_id_text), content)})
+            except Exception as error:
+                logger.error('Admin note update failed exception_type=%s', type(error).__name__)
+                self.send_json(503, {'success': False, 'message': 'Private note could not be updated.'})
+            return
+
+        if method == 'PATCH' and path.startswith('/api/admin/follow-ups/'):
+            reference = path[len('/api/admin/follow-ups/'):]
+            if not reference or '/' in reference:
+                self.send_json(404, {'success': False, 'message': 'Quote request not found.'})
+                return
+            data = self.read_admin_json()
+            if data is None:
+                return
+            raw_date = data.get('date')
+            follow_up_date = None
+            if raw_date is not None:
+                try:
+                    follow_up_date = date.fromisoformat(raw_date)
+                except (TypeError, ValueError):
+                    self.send_json(422, {'success': False, 'message': 'Enter a valid follow-up date.'})
+                    return
+            note = data.get('note')
+            if note is not None and (not isinstance(note, str) or len(note) > 1000):
+                self.send_json(422, {'success': False, 'message': 'Reminder note must be 1000 characters or fewer.'})
+                return
+            completed = data.get('completed')
+            if completed is not None and not isinstance(completed, bool):
+                self.send_json(422, {'success': False, 'message': 'Reminder completion must be true or false.'})
+                return
+            if follow_up_date is None and completed is None:
+                self.send_json(422, {'success': False, 'message': 'Provide a date or completion update.'})
+                return
+            try:
+                result = update_follow_up(reference, follow_up_date, note.strip() if note is not None else None, completed)
+            except Exception as error:
+                logger.error('Follow-up update failed exception_type=%s', type(error).__name__)
+                self.send_json(503, {'success': False, 'message': 'Follow-up reminder could not be updated.'})
+                return
+            if not result:
+                self.send_json(404, {'success': False, 'message': 'Quote request not found.'})
+                return
+            self.send_json(200, {'follow_up': result})
             return
 
         if method == 'GET' and path.startswith('/api/admin/quotes/'):
@@ -1119,7 +1410,7 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
             if data is None:
                 return
             status = data.get('status')
-            if status not in ADMIN_STATUSES:
+            if not isinstance(status, str) or status not in ADMIN_STATUSES:
                 self.send_json(422, {'success': False, 'message': 'Invalid quote status.'})
                 return
             try:
