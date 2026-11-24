@@ -7,6 +7,30 @@
   };
   const byId = (id) => document.getElementById(id);
 
+  function setText(id, value) {
+    const node = byId(id);
+    if (!node) {
+      const error = new Error(`Admin page is missing required element #${id}.`);
+      console.error('[Alipen admin] Unable to render text', error);
+      showNotice(error.message, true);
+      return false;
+    }
+    node.textContent = value === undefined || value === null ? '' : String(value);
+    return true;
+  }
+
+  function bind(id, eventName, handler) {
+    const node = byId(id);
+    if (!node) {
+      const error = new Error(`Admin page is missing control #${id}; that control was not initialized.`);
+      console.error('[Alipen admin] Unable to initialize control', error);
+      showNotice(error.message, true);
+      return null;
+    }
+    node.addEventListener(eventName, handler);
+    return node;
+  }
+
   function makeElement(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -157,14 +181,24 @@
 
   async function loadOverview() {
     const data = await api('/overview');
-    byId('totalCount').textContent = data.total;
-    byId('newCount').textContent = data.new;
-    byId('progressCount').textContent = data.in_progress;
-    byId('wonCount').textContent = data.won || 0;
-    byId('followUpCount').textContent = data.follow_up_due || 0;
-    renderRecent(data.recent || []);
-    renderAttention(data.attention || []);
-    renderFollowUps(data.follow_ups || []);
+    // Render each dashboard component independently so one stale or incomplete
+    // markup fragment cannot prevent the rest of the portal from working.
+    [
+      ['total requests', () => setText('totalCount', data.total)],
+      ['new requests', () => setText('newCount', data.new)],
+      ['in progress requests', () => setText('progressCount', data.in_progress)],
+      ['won requests', () => setText('wonCount', data.won || 0)],
+      ['due follow-ups', () => setText('followUpCount', data.follow_up_due || 0)],
+      ['recent requests', () => renderRecent(data.recent || [])],
+      ['attention list', () => renderAttention(data.attention || [])],
+      ['follow-up list', () => renderFollowUps(data.follow_ups || [])]
+    ].forEach(([component, render]) => {
+      try { render(); }
+      catch (error) {
+        console.error(`[Alipen admin] Failed to render ${component}`, error);
+        showNotice(`Could not load the ${component} dashboard component. ${error.message || ''}`.trim(), true);
+      }
+    });
   }
 
   function renderAttention(quotes) {
@@ -230,7 +264,7 @@
     byId('quotesEmpty').hidden = data.items.length > 0;
     const first = state.total ? ((state.page - 1) * state.pageSize) + 1 : 0;
     const last = Math.min(state.page * state.pageSize, state.total);
-    byId('pageSummary').textContent = `Showing ${first}–${last} of ${state.total} requests`;
+    setText('pageSummary', `Showing ${first}–${last} of ${state.total} requests`);
     byId('previousPage').disabled = state.page <= 1;
     byId('nextPage').disabled = last >= state.total;
   }
@@ -385,23 +419,31 @@
     clearNotice();
     state.currentReference = reference;
     const dialog = byId('quoteDetailDialog');
-    byId('detailLoading').hidden = false;
-    byId('detailContent').hidden = true;
+    const loading = byId('detailLoading');
+    const content = byId('detailContent');
+    if (!dialog || !loading || !content) {
+      const error = new Error('Quote details cannot be opened because required dialog markup is missing.');
+      console.error('[Alipen admin] Failed to open quote details', error);
+      showNotice(error.message, true);
+      return;
+    }
+    loading.hidden = false;
+    content.hidden = true;
     state.quoteDialogScrollY = window.scrollY;
     try {
       prepareQuoteDialogViewport(dialog);
       dialog.showModal();
       const quote = await api(`/quotes/${encodeURIComponent(reference)}`);
-      byId('detailReference').textContent = quote.reference;
+      setText('detailReference', quote.reference);
       byId('detailStatusBadge').replaceChildren(makeElement('span', `status-pill ${statusClass(quote.status)}`, displayStatus(quote.status)));
-      byId('detailName').textContent = quote.name || '—';
-      byId('detailFacility').textContent = quote.facility || '—';
-      byId('detailFacilityType').textContent = quote.facility_type || '—';
-      byId('detailCounty').textContent = quote.county || '—';
-      byId('detailPhone').textContent = quote.phone || '—';
-      byId('detailEmail').textContent = quote.email || '—';
-      byId('detailDate').textContent = formatDate(quote.created_at);
-      byId('detailRequirements').textContent = quote.requirements || 'No additional requirements provided.';
+      setText('detailName', quote.name || '—');
+      setText('detailFacility', quote.facility || '—');
+      setText('detailFacilityType', quote.facility_type || '—');
+      setText('detailCounty', quote.county || '—');
+      setText('detailPhone', quote.phone || '—');
+      setText('detailEmail', quote.email || '—');
+      setText('detailDate', formatDate(quote.created_at));
+      setText('detailRequirements', quote.requirements || 'No additional requirements provided.');
       byId('followUpDate').value = quote.follow_up_date || '';
       byId('followUpNote').value = quote.follow_up_note || '';
       byId('followUpCompleted').checked = Boolean(quote.follow_up_completed);
@@ -415,11 +457,12 @@
       }
       byId('detailStatus').value = ['received', 'new', 'in_progress', 'completed', 'won', 'lost'].includes(quote.status) ? (quote.status === 'new' ? 'received' : quote.status) : 'received';
       await loadPrivateNotes(quote.reference);
-      byId('detailLoading').hidden = true;
-      byId('detailContent').hidden = false;
+      loading.hidden = true;
+      content.hidden = false;
     } catch (error) {
       if (dialog.open) dialog.close();
       else restoreQuoteDialogViewport(dialog);
+      console.error('[Alipen admin] Failed to load quote details', error);
       showNotice(error.message, true);
     }
   }
@@ -433,7 +476,7 @@
       const error = byId('loginError');
       error.hidden = true;
       button.disabled = true;
-      button.textContent = 'Signing in…';
+      setText('loginButton', 'Signing in…');
       const formData = new FormData(form);
       try {
         await api('/login', {
@@ -443,11 +486,11 @@
         form.reset();
         window.location.assign('/admin');
       } catch (exception) {
-        error.textContent = exception.message;
+        setText('loginError', exception.message);
         error.hidden = false;
       } finally {
         button.disabled = false;
-        button.textContent = 'Sign in securely';
+        setText('loginButton', 'Sign in securely');
       }
     });
   }
@@ -458,11 +501,12 @@
       state.csrfToken = session.csrfToken;
       state.isPrimary = Boolean(session.isPrimary);
       state.username = session.username;
-      byId('adminUsersNav').hidden = !state.isPrimary;
-      byId('adminUsernameLabel').textContent = session.username;
-      await loadOverview();
+      const usersNav = byId('adminUsersNav');
+      if (usersNav) usersNav.hidden = !state.isPrimary;
+      setText('adminUsernameLabel', session.username);
     } catch (error) {
       if (error.message) showNotice(error.message, true);
+      console.error('[Alipen admin] Dashboard session initialization failed', error);
       return;
     }
 
@@ -476,13 +520,13 @@
       state.page = 1;
       showView('quotes');
     }));
-    byId('sidebarToggle').addEventListener('click', () => {
+    bind('sidebarToggle', 'click', () => {
       const sidebar = byId('adminSidebar');
       const open = sidebar.classList.toggle('open');
       byId('sidebarToggle').setAttribute('aria-expanded', String(open));
     });
 
-    byId('quoteSearch').addEventListener('input', () => {
+    bind('quoteSearch', 'input', () => {
       clearTimeout(window.adminSearchTimer);
       window.adminSearchTimer = setTimeout(() => {
         state.search = byId('quoteSearch').value.trim().slice(0, 120);
@@ -490,7 +534,7 @@
         loadQuotes().catch((error) => showNotice(error.message, true));
       }, 250);
     });
-    byId('statusFilter').addEventListener('change', () => {
+    bind('statusFilter', 'change', () => {
       state.status = byId('statusFilter').value;
       state.page = 1;
       loadQuotes().catch((error) => showNotice(error.message, true));
@@ -501,17 +545,17 @@
       state.page = 1;
       loadQuotes().catch((error) => showNotice(error.message, true));
     };
-    byId('dateFromFilter').addEventListener('change', applyDateFilters);
-    byId('dateToFilter').addEventListener('change', applyDateFilters);
-    byId('followUpFilter').addEventListener('change', () => {
+    bind('dateFromFilter', 'change', applyDateFilters);
+    bind('dateToFilter', 'change', applyDateFilters);
+    bind('followUpFilter', 'change', () => {
       state.followUp = byId('followUpFilter').checked ? 'due' : 'all';
       state.page = 1;
       loadQuotes().catch((error) => showNotice(error.message, true));
     });
-    byId('followUpDate').addEventListener('change', () => {
+    bind('followUpDate', 'change', () => {
       byId('followUpCompleted').checked = false;
     });
-    byId('clearFilters').addEventListener('click', () => {
+    bind('clearFilters', 'click', () => {
       state.search = '';
       state.status = 'all';
       state.dateFrom = '';
@@ -525,22 +569,27 @@
       byId('followUpFilter').checked = false;
       loadQuotes().catch((error) => showNotice(error.message, true));
     });
-    byId('previousPage').addEventListener('click', () => {
+    bind('previousPage', 'click', () => {
       if (state.page > 1) { state.page -= 1; loadQuotes().catch((error) => showNotice(error.message, true)); }
     });
-    byId('nextPage').addEventListener('click', () => {
+    bind('nextPage', 'click', () => {
       if (state.page * state.pageSize < state.total) { state.page += 1; loadQuotes().catch((error) => showNotice(error.message, true)); }
     });
-    byId('closeDetail').addEventListener('click', () => byId('quoteDetailDialog').close());
+    bind('closeDetail', 'click', () => byId('quoteDetailDialog')?.close());
     const quoteDialog = byId('quoteDetailDialog');
-    quoteDialog.addEventListener('click', (event) => {
-      if (event.target === quoteDialog) quoteDialog.close();
-    });
-    quoteDialog.addEventListener('close', () => {
-      restoreQuoteDialogViewport(quoteDialog);
-      window.requestAnimationFrame(() => window.scrollTo(0, state.quoteDialogScrollY));
-    });
-    byId('privateNoteForm').addEventListener('submit', async (event) => {
+    if (quoteDialog) {
+      quoteDialog.addEventListener('click', (event) => {
+        if (event.target === quoteDialog) quoteDialog.close();
+      });
+      quoteDialog.addEventListener('close', () => {
+        restoreQuoteDialogViewport(quoteDialog);
+        window.requestAnimationFrame(() => window.scrollTo(0, state.quoteDialogScrollY));
+      });
+    } else {
+      console.error('[Alipen admin] Missing #quoteDetailDialog; quote details are unavailable.');
+      showNotice('Quote details are unavailable because the details dialog is missing.', true);
+    }
+    bind('privateNoteForm', 'submit', async (event) => {
       event.preventDefault();
       const input = byId('privateNoteInput');
       try {
@@ -550,7 +599,7 @@
         showNotice('Private note saved.');
       } catch (error) { showNotice(error.message, true); }
     });
-    byId('saveFollowUp').addEventListener('click', async () => {
+    bind('saveFollowUp', 'click', async () => {
       const date = byId('followUpDate').value;
       const completed = byId('followUpCompleted').checked;
       if (!date && !completed) { showNotice('Choose a follow-up date or mark the reminder complete.', true); return; }
@@ -564,7 +613,7 @@
       } catch (error) { showNotice(error.message, true); }
     });
     if (state.isPrimary) {
-      byId('createAdminUserForm').addEventListener('submit', async (event) => {
+      bind('createAdminUserForm', 'submit', async (event) => {
         event.preventDefault();
         const form = event.currentTarget;
         const button = byId('createAdminUserButton');
@@ -584,9 +633,9 @@
           button.disabled = false;
         }
       });
-      byId('closeAdminUserDialog').addEventListener('click', () => byId('adminUserDialog').close());
-      byId('cancelAdminUserEdit').addEventListener('click', () => byId('adminUserDialog').close());
-      byId('editAdminUserForm').addEventListener('submit', async (event) => {
+      bind('closeAdminUserDialog', 'click', () => byId('adminUserDialog')?.close());
+      bind('cancelAdminUserEdit', 'click', () => byId('adminUserDialog')?.close());
+      bind('editAdminUserForm', 'submit', async (event) => {
         event.preventDefault();
         const form = event.currentTarget;
         const formData = new FormData(form);
@@ -615,7 +664,7 @@
         }
       });
     }
-    byId('statusForm').addEventListener('submit', async (event) => {
+    bind('statusForm', 'submit', async (event) => {
       event.preventDefault();
       const button = byId('saveStatus');
       button.disabled = true;
@@ -633,11 +682,22 @@
         button.disabled = false;
       }
     });
-    byId('logoutButton').addEventListener('click', async () => {
+    bind('logoutButton', 'click', async () => {
       try { await api('/logout', { method: 'POST', body: '{}' }); }
-      catch (_) { /* The session may already have expired. */ }
+      catch (error) {
+        // Continue to login when the server session has already expired, but
+        // retain a diagnostic for unexpected network/server failures.
+        console.warn('[Alipen admin] Logout request did not complete; redirecting to sign in.', error);
+      }
       state.csrfToken = '';
       window.location.assign('/admin/login');
+    });
+
+    // Attach interactions before loading dashboard data. Rendering/API errors
+    // must never leave navigation, filtering, or logout inert.
+    loadOverview().catch((error) => {
+      console.error('[Alipen admin] Dashboard overview request failed', error);
+      showNotice(error.message || 'Could not load the dashboard overview.', true);
     });
   }
 
