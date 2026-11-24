@@ -202,6 +202,12 @@ class ServerTests(unittest.TestCase):
         script_version = 'admin.js?v=quote-tabs-20261125-1'
         self.assertIn(script_version, admin_html)
         self.assertIn(script_version, login_html)
+        stylesheet_version = 'admin.css?v=quote-tabs-20261125-2'
+        self.assertIn(stylesheet_version, admin_html)
+        self.assertIn(stylesheet_version, login_html)
+        quote_buttons = re.findall(r'<button[^>]*data-quote-status="[^"]+"[^>]*>', admin_html)
+        self.assertEqual(len(quote_buttons), 4)
+        self.assertTrue(all('invoice-tab' in button for button in quote_buttons))
 
     def test_admin_login_cookie_and_session_security(self):
         status, body, headers = self.admin_login()
