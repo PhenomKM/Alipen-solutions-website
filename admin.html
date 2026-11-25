@@ -7,9 +7,9 @@
   <meta name="robots" content="noindex, nofollow" />
   <title>Quote Management | Alipen Solutions</title>
   <link rel="icon" type="image/png" href="public/images/favicon.png" />
-  <link rel="stylesheet" href="admin.css?v=quote-tabs-20261125-2" />
+  <link rel="stylesheet" href="admin.css?v=crm-20261125-1" />
   <script src="products.js" defer></script>
-  <script src="admin.js?v=quote-tabs-20261125-1" defer></script>
+  <script src="admin.js?v=crm-20261125-1" defer></script>
   <script src="admin-diagnostics-loader.js" defer></script>
 </head>
 <body class="admin-app" data-admin-page="dashboard">
@@ -27,6 +27,7 @@
           <span class="nav-mark" aria-hidden="true">▤</span><span>Quote requests</span>
         </button>
         <button type="button" class="admin-nav-link" data-admin-view="documents"><span class="nav-mark" aria-hidden="true">▤</span><span>Invoices</span></button>
+        <button type="button" class="admin-nav-link" data-admin-view="customers"><span class="nav-mark" aria-hidden="true">♙</span><span>Customers</span></button>
         <button id="adminUsersNav" type="button" class="admin-nav-link" data-admin-view="users" hidden>
           <svg class="nav-mark nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.25"/><path d="M3.5 19v-1.2a5.5 5.5 0 0 1 11 0V19zM16 5.2a3.2 3.2 0 0 1 0 5.6M17 13.2a4.8 4.8 0 0 1 3.5 4.6V19h-4"/></svg><span>Admin accounts</span>
         </button>
@@ -104,6 +105,21 @@
           </section>
           <details class="blank-invoice-templates"><summary>Download blank invoice templates</summary><div class="document-downloads"><a class="admin-button" href="/api/admin/documents/invoice-template.docx" download>Download Word template</a><a class="admin-button" href="/api/admin/documents/invoice-template.pdf" download>Download PDF template</a></div><p class="document-reminder">Unverified address, tax, and payment fields remain placeholders in these blank templates.</p></details>
         </section>
+        <section id="customersView" class="admin-view" aria-labelledby="customersTitle" hidden>
+          <div class="page-heading"><div><span class="page-eyebrow">CUSTOMER RELATIONSHIPS</span><h1 id="customersTitle">Customers</h1><p>Manage customer contact details and review their quote and invoice history.</p></div></div>
+          <div class="stats-grid customer-stats" aria-label="Customer summary">
+            <article class="stat-card"><span class="stat-label">Total customers</span><strong id="customerTotalCount" class="stat-value">—</strong><span class="stat-caption">All customer profiles</span></article>
+            <article class="stat-card stat-new"><span class="stat-label">New customers</span><strong id="customerNewCount" class="stat-value">—</strong><span class="stat-caption">Added in the last 30 days</span></article>
+            <article class="stat-card stat-progress"><span class="stat-label">Returning customers</span><strong id="customerReturningCount" class="stat-value">—</strong><span class="stat-caption">More than one quote request</span></article>
+            <article class="stat-card stat-followup"><span class="stat-label">With outstanding invoices</span><strong id="customerOutstandingCount" class="stat-value">—</strong><span class="stat-caption">Balance due</span></article>
+          </div>
+          <section class="admin-panel customer-list-panel">
+            <div class="customer-toolbar"><label class="search-control"><span class="sr-only">Search customers</span><span aria-hidden="true">⌕</span><input id="customerSearch" type="search" maxlength="120" placeholder="Search name, email, phone or company" /></label></div>
+            <div class="table-scroll"><table class="admin-table customer-table"><thead><tr><th>Customer</th><th>Date added</th><th>Quotes</th><th>Invoices</th><th>Paid</th><th>Outstanding</th><th></th></tr></thead><tbody id="customerRows"></tbody></table></div>
+            <p id="customersEmpty" class="empty-state" hidden>No customers match this search.</p>
+            <div class="pagination"><span id="customerPageSummary" class="page-summary">—</span><div><button id="customerPreviousPage" class="page-button" type="button" disabled>← Previous</button><button id="customerNextPage" class="page-button" type="button" disabled>Next →</button></div></div>
+          </section>
+        </section>
         <section id="usersView" class="admin-view" aria-labelledby="usersTitle" hidden>
           <div class="page-heading">
             <div><span class="page-eyebrow">ACCESS CONTROL</span><h1 id="usersTitle">Admin accounts</h1><p>Create and manage additional administrator access.</p></div>
@@ -148,6 +164,20 @@
       <section class="detail-section"><h3>Follow-up reminder</h3><div class="follow-up-editor"><label>Follow-up date<input id="followUpDate" type="date" /></label><label>Private reminder note<input id="followUpNote" type="text" maxlength="1000" /></label><label class="follow-up-done"><input id="followUpCompleted" type="checkbox" /> Completed</label><button id="saveFollowUp" class="admin-button admin-button-primary" type="button">Save reminder</button></div></section>
       <div class="quote-invoice-action"><button id="createInvoiceFromQuote" class="admin-button admin-button-primary" type="button">Create invoice from this quote</button></div>
       <form id="statusForm" class="status-editor"><label>Quote actions</label><div><button id="markQuoteLost" class="admin-button" type="button">Mark as Lost</button><button id="saveStatus" class="admin-button admin-button-primary" type="submit" hidden>Save status</button></div></form>
+    </div>
+  </dialog>
+  <dialog id="customerProfileDialog" class="detail-dialog customer-profile-dialog" aria-labelledby="customerProfileTitle">
+    <div class="dialog-heading"><div><span class="page-eyebrow">CUSTOMER PROFILE</span><h2 id="customerProfileTitle">Customer details</h2></div><button id="closeCustomerProfile" class="dialog-close" type="button" aria-label="Close customer profile">×</button></div>
+    <div class="customer-profile-content">
+      <form id="customerEditForm" class="customer-edit-form">
+        <input id="customerProfileId" type="hidden" />
+        <h3>Contact information</h3>
+        <div class="customer-edit-fields"><label>Full name<input id="customerFullName" maxlength="180" required /></label><label>Email<input id="customerEmail" type="email" maxlength="180" /></label><label>Phone<input id="customerPhone" type="tel" maxlength="50" /></label><label>Company<input id="customerCompany" maxlength="180" /></label><label class="customer-address-field">Address<textarea id="customerAddress" maxlength="2000" rows="2"></textarea></label></div>
+        <div class="customer-profile-actions"><span id="customerAddedLabel"></span><button class="admin-button admin-button-primary" type="submit">Save contact details</button></div>
+      </form>
+      <section class="detail-section"><h3>Quote requests</h3><div class="table-scroll"><table class="admin-table"><thead><tr><th>Reference</th><th>Facility</th><th>Status</th><th>Date</th></tr></thead><tbody id="customerQuoteRows"></tbody></table></div><p id="customerQuotesEmpty" class="empty-state" hidden>No linked quote requests.</p></section>
+      <section class="detail-section"><h3>Invoices</h3><div class="table-scroll"><table class="admin-table"><thead><tr><th>Invoice</th><th>Amount</th><th>Payment</th><th>Balance</th></tr></thead><tbody id="customerInvoiceRows"></tbody></table></div><p id="customerInvoicesEmpty" class="empty-state" hidden>No linked invoices.</p></section>
+      <section class="detail-section"><h3>Private customer notes</h3><div id="customerNotesList" class="private-notes-list"></div><form id="customerNoteForm" class="private-note-form"><label for="customerNoteInput">Add a private note</label><textarea id="customerNoteInput" maxlength="5000" rows="3" required></textarea><button class="admin-button admin-button-primary" type="submit">Save private note</button></form></section>
     </div>
   </dialog>
   <dialog id="lostQuoteDialog" class="detail-dialog lost-quote-dialog" aria-labelledby="lostQuoteTitle">

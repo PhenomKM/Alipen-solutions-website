@@ -133,6 +133,73 @@ def database_connection():
         raise DatabaseUnavailable('Could not connect to PostgreSQL') from exc
 
 
+def _normalized_email(value):
+    return clean_text(value, 180).lower()
+
+
+def _normalized_phone(value):
+    return re.sub(r'[^0-9]', '', clean_text(value, 50))
+
+
+def resolve_customer(conn, name, email='', phone='', company_name='', customer_address='', created_at=None):
+    """Match by email first, then by a unique phone plus exact name agreement."""
+    email = _normalized_email(email)
+    phone = clean_text(phone, 50)
+    name = clean_text(name, 180) or 'Customer'
+    company_name = clean_text(company_name, 180)
+    customer_address = clean_text(customer_address, 2000)
+    customer_id = None
+    if email:
+        row = conn.execute('SELECT id FROM customers WHERE LOWER(email) = %s FOR UPDATE', (email,)).fetchone()
+        customer_id = row[0] if row else None
+    if not customer_id and _normalized_phone(phone):
+        normalized_phone = _normalized_phone(phone)
+        # Serialize phone fallback so simultaneous first requests cannot create
+        # duplicates; exact name agreement avoids merging shared numbers.
+        conn.execute('SELECT pg_advisory_xact_lock(hashtext(%s))', (f'alipen-customer-phone:{normalized_phone}',))
+        matches = conn.execute('''SELECT id FROM customers
+            WHERE regexp_replace(phone, '[^0-9]', '', 'g') = %s AND LOWER(full_name) = LOWER(%s)
+            ORDER BY created_at, id LIMIT 2''', (normalized_phone, name)).fetchall()
+        if len(matches) == 1:
+            customer_id = matches[0][0]
+    if customer_id:
+        conn.execute('''UPDATE customers SET
+            phone = CASE WHEN phone = '' THEN %s ELSE phone END,
+            company_name = CASE WHEN company_name = '' THEN %s ELSE company_name END,
+            customer_address = CASE WHEN customer_address = '' THEN %s ELSE customer_address END,
+            created_at = LEAST(created_at, COALESCE(%s, created_at)),
+            updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s''', (phone, company_name, customer_address, created_at, customer_id))
+        return customer_id
+    if not email and not phone:
+        return None
+    row = conn.execute('''INSERT INTO customers
+        (full_name, email, phone, company_name, customer_address, created_at)
+        VALUES (%s, %s, %s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP))
+        ON CONFLICT (LOWER(email)) WHERE email <> '' DO NOTHING
+        RETURNING id''', (name, email, phone, company_name, customer_address, created_at)).fetchone()
+    if row:
+        return row[0]
+    # A concurrent submission with this email won the insert. Resolve to that row.
+    row = conn.execute('SELECT id FROM customers WHERE LOWER(email) = %s FOR UPDATE', (email,)).fetchone()
+    return row[0] if row else None
+
+
+def _optional_customer_link(conn, operation, context):
+    """Keep optional CRM linkage failures from aborting quote/invoice writes."""
+    savepoint = 'alipen_customer_link'
+    conn.execute(f'SAVEPOINT {savepoint}')
+    try:
+        customer_id = operation()
+        conn.execute(f'RELEASE SAVEPOINT {savepoint}')
+        return customer_id
+    except Exception as error:
+        conn.execute(f'ROLLBACK TO SAVEPOINT {savepoint}')
+        conn.execute(f'RELEASE SAVEPOINT {savepoint}')
+        logger.error('%s customer linkage failed exception_type=%s', context, type(error).__name__)
+        return None
+
+
 def init_database():
     with database_connection() as conn:
         conn.execute('''
@@ -223,6 +290,33 @@ def init_database():
             )
         ''')
         conn.execute('''
+            CREATE TABLE IF NOT EXISTS customers (
+                id BIGSERIAL PRIMARY KEY,
+                full_name VARCHAR(180) NOT NULL,
+                email VARCHAR(180) NOT NULL DEFAULT '',
+                phone VARCHAR(50) NOT NULL DEFAULT '',
+                company_name VARCHAR(180) NOT NULL DEFAULT '',
+                customer_address TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.execute('ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS customer_id BIGINT REFERENCES customers(id) ON DELETE SET NULL')
+        conn.execute('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS customer_id BIGINT REFERENCES customers(id) ON DELETE SET NULL')
+        conn.execute('''CREATE UNIQUE INDEX IF NOT EXISTS customers_email_lower_unique
+            ON customers (LOWER(email)) WHERE email <> '' ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS quote_requests_customer_created_idx ON quote_requests (customer_id, created_at DESC)')
+        conn.execute('CREATE INDEX IF NOT EXISTS invoices_customer_date_idx ON invoices (customer_id, invoice_date DESC, id DESC)')
+        conn.execute('''CREATE TABLE IF NOT EXISTS customer_notes (
+            id BIGSERIAL PRIMARY KEY,
+            customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+            author_username VARCHAR(120) NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )''')
+        conn.execute('CREATE INDEX IF NOT EXISTS customer_notes_customer_created_idx ON customer_notes (customer_id, created_at, id)')
+        conn.execute('''
             CREATE TABLE IF NOT EXISTS invoice_items (
                 id BIGSERIAL PRIMARY KEY,
                 invoice_id BIGINT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
@@ -239,21 +333,47 @@ def init_database():
         conn.execute('CREATE INDEX IF NOT EXISTS invoices_status_date_idx ON invoices (status, invoice_date DESC, id DESC)')
         conn.execute('CREATE INDEX IF NOT EXISTS invoices_quote_reference_idx ON invoices (quote_reference)')
         conn.execute('CREATE INDEX IF NOT EXISTS invoice_items_invoice_position_idx ON invoice_items (invoice_id, position)')
+        # Link legacy rows without rewriting their historical contact snapshots.
+        legacy_quotes = conn.execute('''SELECT id, name, email, phone, facility, created_at
+            FROM quote_requests WHERE customer_id IS NULL ORDER BY created_at, id''').fetchall()
+        for quote_id, name, email, phone, company, created_at in legacy_quotes:
+            customer_id = resolve_customer(conn, name, email, phone, company, '', created_at)
+            if customer_id:
+                conn.execute('UPDATE quote_requests SET customer_id = %s WHERE id = %s AND customer_id IS NULL', (customer_id, quote_id))
+        legacy_invoices = conn.execute('''SELECT id, quote_reference, customer_name, customer_email,
+                company_name, customer_address, created_at
+            FROM invoices WHERE customer_id IS NULL ORDER BY created_at, id''').fetchall()
+        for invoice_id, quote_reference, name, email, company, address, created_at in legacy_invoices:
+            customer_id = None
+            linked = None
+            if quote_reference:
+                linked = conn.execute('SELECT customer_id FROM quote_requests WHERE reference = %s', (quote_reference,)).fetchone()
+                customer_id = linked[0] if linked else None
+            if not customer_id and email:
+                customer_id = resolve_customer(conn, name, email, '', company, address, created_at)
+                if customer_id and linked:
+                    conn.execute('UPDATE quote_requests SET customer_id = %s WHERE reference = %s AND customer_id IS NULL', (customer_id, quote_reference))
+            if customer_id:
+                conn.execute('UPDATE invoices SET customer_id = %s WHERE id = %s AND customer_id IS NULL', (customer_id, invoice_id))
 
 
 def save_quote(data, ip_address):
     reference = f"ALIPEN-{secrets.token_hex(3).upper()}"
     with database_connection() as conn:
+        customer_id = _optional_customer_link(conn, lambda: resolve_customer(
+            conn, data['name'], data['email'], data.get('phone'), data.get('facility'),
+            '', datetime.now(timezone.utc),
+        ), 'Quote')
         conn.execute('''
             INSERT INTO quote_requests
                 (reference, name, facility, facility_type, county, phone, email,
-                 requirements, items, ip_address, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, 'new')
+                 requirements, items, ip_address, status, customer_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, 'new', %s)
         ''', (
             reference, data['name'], data['facility'], data.get('facilityType', ''),
             data.get('county', ''), data['phone'], data['email'],
             data.get('requirements', ''), json.dumps(data.get('items', []), ensure_ascii=False),
-            ip_address,
+            ip_address, customer_id,
         ))
     return reference
 
@@ -628,6 +748,156 @@ def get_admin_quote(reference):
     return quote
 
 
+def _iso_customer_date(value):
+    return value.isoformat() if hasattr(value, 'isoformat') else value
+
+
+def _customer_summary(conn):
+    row = conn.execute('''SELECT COUNT(*),
+        COUNT(*) FILTER (WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'),
+        COUNT(*) FILTER (WHERE (SELECT COUNT(*) FROM quote_requests q WHERE q.customer_id = c.id) > 1),
+        COUNT(*) FILTER (WHERE EXISTS (
+            SELECT 1 FROM invoices i WHERE i.customer_id = c.id
+            AND GREATEST(i.total - i.amount_paid, 0) > 0
+        )) FROM customers c''').fetchone()
+    return {'total': row[0], 'new': row[1], 'returning': row[2], 'with_outstanding': row[3]}
+
+
+def _customer_money_by_currency(conn, customer_id, paid=False):
+    if paid:
+        sql = '''SELECT currency, SUM(amount_paid) FROM invoices
+            WHERE customer_id = %s AND amount_paid > 0 GROUP BY currency ORDER BY currency'''
+    else:
+        sql = '''SELECT currency, SUM(GREATEST(total - amount_paid, 0)) FROM invoices
+            WHERE customer_id = %s AND GREATEST(total - amount_paid, 0) > 0
+            GROUP BY currency ORDER BY currency'''
+    return [{'currency': row[0].strip(), 'amount': _decimal_text(row[1])}
+            for row in conn.execute(sql, (customer_id,)).fetchall()]
+
+
+def list_customers(search='', page=1, page_size=20):
+    clauses, params = [], []
+    if search:
+        pattern = f'%{search}%'
+        clauses.append("(full_name ILIKE %s OR email ILIKE %s OR phone ILIKE %s OR company_name ILIKE %s)")
+        params.extend((pattern, pattern, pattern, pattern))
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ''
+    offset = (page - 1) * page_size
+    with database_connection() as conn:
+        summary = _customer_summary(conn)
+        total = conn.execute(f'SELECT COUNT(*) FROM customers{where}', tuple(params)).fetchone()[0]
+        rows = conn.execute(f'''SELECT id, full_name, email, phone, company_name, created_at,
+            (SELECT COUNT(*) FROM quote_requests q WHERE q.customer_id = c.id) AS quote_count,
+            (SELECT COUNT(*) FROM invoices i WHERE i.customer_id = c.id) AS invoice_count
+            FROM customers c{where} ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s''',
+            tuple(params + [page_size, offset])).fetchall()
+        items = []
+        for row in rows:
+            items.append({
+                'id': row[0], 'full_name': row[1], 'email': row[2], 'phone': row[3],
+                'company_name': row[4], 'created_at': _iso_customer_date(row[5]),
+                'quote_count': row[6], 'invoice_count': row[7],
+                'paid_amounts': _customer_money_by_currency(conn, row[0], paid=True),
+                'outstanding_amounts': _customer_money_by_currency(conn, row[0]),
+            })
+    return {'customers': items, 'total': total, 'page': page, 'pageSize': page_size, 'summary': summary}
+
+
+def get_customer_profile(customer_id):
+    with database_connection() as conn:
+        row = conn.execute('''SELECT id, full_name, email, phone, company_name, customer_address, created_at, updated_at
+            FROM customers WHERE id = %s''', (customer_id,)).fetchone()
+        if not row:
+            return None
+        customer = dict(zip(('id', 'full_name', 'email', 'phone', 'company_name', 'customer_address', 'created_at', 'updated_at'), row))
+        customer['created_at'] = _iso_customer_date(customer['created_at'])
+        customer['updated_at'] = _iso_customer_date(customer['updated_at'])
+        quote_rows = conn.execute('''SELECT reference, name, facility, status, created_at
+            FROM quote_requests WHERE customer_id = %s ORDER BY created_at DESC, id DESC''', (customer_id,)).fetchall()
+        invoice_rows = conn.execute(f'''SELECT {', '.join(INVOICE_COLUMNS)} FROM invoices
+            WHERE customer_id = %s ORDER BY invoice_date DESC, id DESC''', (customer_id,)).fetchall()
+        note_rows = conn.execute('''SELECT id, author_username, content, created_at, updated_at
+            FROM customer_notes WHERE customer_id = %s ORDER BY created_at DESC, id DESC''', (customer_id,)).fetchall()
+        profile = {
+            'customer': customer,
+            'quotes': [{'reference': r[0], 'name': r[1], 'facility': r[2],
+                        'status': {'received': 'new', 'won': 'completed'}.get(r[3], r[3] or 'new'),
+                        'created_at': _iso_customer_date(r[4])} for r in quote_rows],
+            'invoices': [serialize_invoice(invoice) for invoice in invoice_rows],
+            'notes': [{'id': r[0], 'author': r[1], 'content': r[2],
+                       'created_at': _iso_customer_date(r[3]), 'updated_at': _iso_customer_date(r[4])}
+                      for r in note_rows],
+            'paid_amounts': _customer_money_by_currency(conn, customer_id, paid=True),
+            'outstanding_amounts': _customer_money_by_currency(conn, customer_id),
+        }
+    return profile
+
+
+class DuplicateCustomerEmail(ValueError):
+    pass
+
+
+def update_customer(customer_id, full_name, email, phone, company_name, customer_address):
+    try:
+        with database_connection() as conn:
+            row = conn.execute('''UPDATE customers SET full_name = %s, email = %s, phone = %s,
+                company_name = %s, customer_address = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                RETURNING id, full_name, email, phone, company_name, customer_address, created_at, updated_at''',
+                (full_name, email, phone, company_name, customer_address, customer_id)).fetchone()
+    except Exception as error:
+        if getattr(error, 'sqlstate', None) == '23505':
+            raise DuplicateCustomerEmail from error
+        raise
+    if not row:
+        return None
+    customer = dict(zip(('id', 'full_name', 'email', 'phone', 'company_name', 'customer_address', 'created_at', 'updated_at'), row))
+    customer['created_at'] = _iso_customer_date(customer['created_at'])
+    customer['updated_at'] = _iso_customer_date(customer['updated_at'])
+    return customer
+
+
+def list_customer_notes(customer_id):
+    with database_connection() as conn:
+        rows = conn.execute('''SELECT id, author_username, content, created_at, updated_at
+            FROM customer_notes WHERE customer_id = %s ORDER BY created_at DESC, id DESC''', (customer_id,)).fetchall()
+    return [{'id': r[0], 'author': r[1], 'content': r[2],
+             'created_at': _iso_customer_date(r[3]), 'updated_at': _iso_customer_date(r[4])} for r in rows]
+
+
+def create_customer_note(customer_id, author, content):
+    with database_connection() as conn:
+        row = conn.execute('''INSERT INTO customer_notes (customer_id, author_username, content)
+            SELECT id, %s, %s FROM customers WHERE id = %s
+            RETURNING id, author_username, content, created_at, updated_at''',
+            (author, content, customer_id)).fetchone()
+    return {'id': row[0], 'author': row[1], 'content': row[2],
+            'created_at': _iso_customer_date(row[3]), 'updated_at': _iso_customer_date(row[4])} if row else None
+
+
+def get_customer_note(note_id):
+    with database_connection() as conn:
+        row = conn.execute('''SELECT id, customer_id, author_username, content, created_at, updated_at
+            FROM customer_notes WHERE id = %s''', (note_id,)).fetchone()
+    return {'id': row[0], 'customer_id': row[1], 'author': row[2], 'content': row[3],
+            'created_at': _iso_customer_date(row[4]), 'updated_at': _iso_customer_date(row[5])} if row else None
+
+
+def update_customer_note(note_id, content):
+    with database_connection() as conn:
+        row = conn.execute('''UPDATE customer_notes SET content = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s RETURNING id, author_username, content, created_at, updated_at''',
+            (content, note_id)).fetchone()
+    return {'id': row[0], 'author': row[1], 'content': row[2],
+            'created_at': _iso_customer_date(row[3]), 'updated_at': _iso_customer_date(row[4])} if row else None
+
+
+def delete_customer_note(note_id):
+    with database_connection() as conn:
+        row = conn.execute('DELETE FROM customer_notes WHERE id = %s RETURNING id', (note_id,)).fetchone()
+    return bool(row)
+
+
 class InvoiceValidationError(ValueError):
     pass
 
@@ -797,6 +1067,7 @@ def _invoice_pdf_data(invoice, items):
 def create_invoice(data, username):
     invoice = validate_invoice_payload(data)
     with database_connection() as conn:
+        customer_id = None
         if invoice['quote_reference']:
             quote = conn.execute('SELECT reference FROM quote_requests WHERE reference = %s FOR UPDATE', (invoice['quote_reference'],)).fetchone()
             if not quote:
@@ -804,6 +1075,20 @@ def create_invoice(data, username):
             quote_status = conn.execute('SELECT status FROM quote_requests WHERE reference = %s', (invoice['quote_reference'],)).fetchone()
             if quote_status and quote_status[0] == 'lost':
                 raise InvoiceValidationError('A lost quote cannot be invoiced. Reopen it before creating an invoice.')
+            def link_quote_customer():
+                quote_customer = conn.execute('SELECT customer_id, name, email, phone, facility, created_at FROM quote_requests WHERE reference = %s', (invoice['quote_reference'],)).fetchone()
+                linked_customer_id = None
+                if quote_customer:
+                    linked_customer_id = quote_customer[0] or resolve_customer(conn, quote_customer[1], quote_customer[2], quote_customer[3], quote_customer[4], '', quote_customer[5])
+                if not linked_customer_id and invoice['customer_email']:
+                    linked_customer_id = resolve_customer(conn, invoice['customer_name'], invoice['customer_email'], '', invoice['company_name'], invoice['customer_address'])
+                if linked_customer_id and quote_customer and not quote_customer[0]:
+                    conn.execute('UPDATE quote_requests SET customer_id = %s WHERE reference = %s AND customer_id IS NULL', (linked_customer_id, invoice['quote_reference']))
+                return linked_customer_id
+            customer_id = _optional_customer_link(conn, link_quote_customer, 'Invoice')
+        elif invoice['customer_email']:
+            customer_id = _optional_customer_link(conn, lambda: resolve_customer(
+                conn, invoice['customer_name'], invoice['customer_email'], '', invoice['company_name'], invoice['customer_address']), 'Invoice')
         sequence = conn.execute(f"SELECT nextval('{INVOICE_NUMBER_SEQUENCE}')").fetchone()[0]
         invoice_number = f"ALP-{invoice['invoice_date'].year}-{int(sequence):06d}"
         params = tuple(invoice[field] for field in (
@@ -814,10 +1099,10 @@ def create_invoice(data, username):
             INSERT INTO invoices
                 (invoice_number, quote_reference, customer_name, customer_email, company_name,
                  customer_address, invoice_date, due_date, currency, subtotal, discount_amount,
-                 tax_rate, tax_amount, total, notes, payment_instructions, created_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 tax_rate, tax_amount, total, notes, payment_instructions, created_by, customer_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING {', '.join(INVOICE_COLUMNS)}
-        ''', (invoice_number, *params, clean_text(username, 120))).fetchone()
+        ''', (invoice_number, *params, clean_text(username, 120), customer_id)).fetchone()
         invoice_id = row[0]
         _insert_invoice_items(conn, invoice_id, invoice['items'])
         invoice['id'] = invoice_id
@@ -1534,6 +1819,155 @@ class AlipenRequestHandler(http.server.SimpleHTTPRequestHandler):
                 'authenticated': True, 'username': session['username'],
                 'isPrimary': session.get('is_primary', False), 'csrfToken': session['csrf_token'],
             })
+            return
+
+        if path == '/api/admin/customers' and method == 'GET':
+            params = urllib.parse.parse_qs(query_string, keep_blank_values=True)
+            search = clean_text(params.get('search', [''])[0], 120)
+            try:
+                page = int(params.get('page', ['1'])[0])
+            except (TypeError, ValueError):
+                page = 0
+            if page < 1 or page > 1_000_000:
+                self.send_json(400, {'success': False, 'message': 'Invalid customer page.'})
+                return
+            try:
+                self.send_json(200, list_customers(search, page))
+            except Exception as error:
+                logger.error('Customer list unavailable exception_type=%s', type(error).__name__)
+                self.send_json(503, {'success': False, 'message': 'Customers are temporarily unavailable.'})
+            return
+
+        if path.startswith('/api/admin/customers/'):
+            parts = path[len('/api/admin/customers/'):].split('/')
+            if not parts[0].isdecimal() or len(parts[0]) > 18 or int(parts[0]) < 1:
+                self.send_json(404, {'success': False, 'message': 'Customer not found.'})
+                return
+            customer_id = int(parts[0])
+            if len(parts) == 1 and method == 'GET':
+                try:
+                    profile = get_customer_profile(customer_id)
+                except Exception as error:
+                    logger.error('Customer profile unavailable exception_type=%s', type(error).__name__)
+                    self.send_json(503, {'success': False, 'message': 'Customer profile is temporarily unavailable.'})
+                    return
+                if not profile:
+                    self.send_json(404, {'success': False, 'message': 'Customer not found.'})
+                else:
+                    self.send_json(200, profile)
+                return
+            if len(parts) == 1 and method == 'PATCH':
+                data = self.read_admin_json()
+                if data is None:
+                    return
+                limits = {'full_name': 180, 'email': 180, 'phone': 50, 'company_name': 180, 'customer_address': 2000}
+                if any(not isinstance(data.get(key, ''), str) or len(data.get(key, '')) > limit for key, limit in limits.items()):
+                    self.send_json(422, {'success': False, 'message': 'Customer contact fields have invalid values or exceed their length limits.'})
+                    return
+                customer = {key: clean_text(data.get(key, ''), limit) for key, limit in limits.items()}
+                customer['email'] = customer['email'].lower()
+                if not customer['full_name']:
+                    self.send_json(422, {'success': False, 'message': 'Customer name is required.'})
+                    return
+                if customer['email'] and (not EMAIL_RE.fullmatch(customer['email']) or parseaddr(customer['email'])[1] != customer['email']):
+                    self.send_json(422, {'success': False, 'message': 'Enter a valid customer email address.'})
+                    return
+                if customer['phone'] and len(_normalized_phone(customer['phone'])) < 7:
+                    self.send_json(422, {'success': False, 'message': 'Enter a valid phone number or leave the field blank.'})
+                    return
+                try:
+                    updated = update_customer(customer_id, **customer)
+                except DuplicateCustomerEmail:
+                    self.send_json(409, {'success': False, 'message': 'That email address is already assigned to another customer.'})
+                    return
+                except Exception as error:
+                    logger.error('Customer update failed exception_type=%s', type(error).__name__)
+                    self.send_json(503, {'success': False, 'message': 'Customer could not be updated.'})
+                    return
+                if not updated:
+                    self.send_json(404, {'success': False, 'message': 'Customer not found.'})
+                else:
+                    self.send_json(200, {'customer': updated})
+                return
+            if len(parts) == 2 and parts[1] == 'notes':
+                if method == 'GET':
+                    try:
+                        profile = get_customer_profile(customer_id)
+                    except Exception as error:
+                        logger.error('Customer notes lookup failed exception_type=%s', type(error).__name__)
+                        self.send_json(503, {'success': False, 'message': 'Customer notes are temporarily unavailable.'})
+                        return
+                    if not profile:
+                        self.send_json(404, {'success': False, 'message': 'Customer not found.'})
+                    else:
+                        self.send_json(200, {'notes': profile['notes']})
+                    return
+                if method == 'POST':
+                    data = self.read_admin_json()
+                    if data is None:
+                        return
+                    content = valid_admin_note(data.get('content'))
+                    if not content:
+                        self.send_json(422, {'success': False, 'message': 'Note must contain between 1 and 5000 characters.'})
+                        return
+                    try:
+                        note = create_customer_note(customer_id, session['username'], content)
+                    except Exception as error:
+                        logger.error('Customer note creation failed exception_type=%s', type(error).__name__)
+                        self.send_json(503, {'success': False, 'message': 'Customer note could not be saved.'})
+                        return
+                    if not note:
+                        self.send_json(404, {'success': False, 'message': 'Customer not found.'})
+                    else:
+                        self.send_json(201, {'note': note})
+                    return
+            self.send_json(404, {'success': False, 'message': 'Customer endpoint not found.'})
+            return
+
+        if path.startswith('/api/admin/customer-notes/'):
+            note_id_text = path[len('/api/admin/customer-notes/'):]
+            if not note_id_text.isdecimal() or len(note_id_text) > 18 or int(note_id_text) < 1:
+                self.send_json(404, {'success': False, 'message': 'Customer note not found.'})
+                return
+            note_id = int(note_id_text)
+            try:
+                note = get_customer_note(note_id)
+            except Exception as error:
+                logger.error('Customer note lookup failed exception_type=%s', type(error).__name__)
+                self.send_json(503, {'success': False, 'message': 'Customer note is temporarily unavailable.'})
+                return
+            if not note:
+                self.send_json(404, {'success': False, 'message': 'Customer note not found.'})
+                return
+            if note['author'] != session['username'] and not session.get('is_primary'):
+                self.send_json(403, {'success': False, 'message': 'Only the author or a primary administrator can manage this note.'})
+                return
+            if method == 'PATCH':
+                data = self.read_admin_json()
+                if data is None:
+                    return
+                content = valid_admin_note(data.get('content'))
+                if not content:
+                    self.send_json(422, {'success': False, 'message': 'Note must contain between 1 and 5000 characters.'})
+                    return
+                try:
+                    updated = update_customer_note(note_id, content)
+                except Exception as error:
+                    logger.error('Customer note update failed exception_type=%s', type(error).__name__)
+                    self.send_json(503, {'success': False, 'message': 'Customer note could not be updated.'})
+                    return
+                self.send_json(200, {'note': updated})
+                return
+            if method == 'DELETE':
+                try:
+                    delete_customer_note(note_id)
+                except Exception as error:
+                    logger.error('Customer note deletion failed exception_type=%s', type(error).__name__)
+                    self.send_json(503, {'success': False, 'message': 'Customer note could not be deleted.'})
+                    return
+                self.send_json(200, {'success': True})
+                return
+            self.send_json(404, {'success': False, 'message': 'Customer note endpoint not found.'})
             return
 
         if method == 'GET' and path == '/api/admin/invoices':

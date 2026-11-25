@@ -363,6 +363,25 @@ button { cursor: pointer; }
 .invoice-details-content .invoice-payment-meta { margin: 0 0 14px; padding: 12px; border-radius: 8px; background: var(--admin-green-soft); color: #24733a; font-size: 11px; }
 .invoice-details-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 0 24px 20px; }
 .invoice-details-actions .admin-button:not(.admin-button-primary) { border: 1px solid var(--admin-line); background: #fff; color: #475569; }
+.customer-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.customer-list-panel { padding-bottom: 3px; }
+.customer-toolbar { display: flex; justify-content: flex-end; padding: 15px 18px; border-bottom: 1px solid #edf1f5; }
+.customer-toolbar .search-control { width: min(100%, 430px); }
+.customer-table td:nth-child(2), .customer-table td:nth-child(3), .customer-table td:nth-child(4) { text-align: center; }
+.customer-profile-dialog { width: min(900px, calc(100vw - 28px)); max-width: calc(100vw - 28px); max-height: min(92vh, 900px); overflow: auto; }
+.customer-profile-content { padding: 20px 23px 24px; }
+.customer-edit-form { display: grid; gap: 13px; }
+.customer-edit-form h3 { margin: 0; font-size: 13px; }
+.customer-edit-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
+.customer-edit-fields label { display: grid; gap: 5px; color: #475569; font-size: 10px; font-weight: 700; }
+.customer-edit-fields input, .customer-edit-fields textarea { width: 100%; min-height: 39px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; color: var(--admin-ink); font: inherit; }
+.customer-edit-fields textarea { resize: vertical; }
+.customer-address-field { grid-column: 1 / -1; }
+.customer-profile-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--admin-muted); font-size: 10px; }
+.customer-profile-content .detail-section { margin-top: 22px; }
+.customer-profile-content .detail-section h3 { margin-bottom: 10px; }
+.customer-profile-dialog .table-scroll { border: 1px solid #edf1f5; border-radius: 8px; }
+.customer-profile-dialog .admin-table { white-space: nowrap; }
 @media (max-width: 720px) {
   .invoice-page-heading { align-items: stretch; }
   .invoice-toolbar { align-items: stretch; flex-direction: column; padding: 12px; }
@@ -388,4 +407,14 @@ button { cursor: pointer; }
   .invoice-details-content { padding: 0 14px 16px; }
   .invoice-details-actions { padding: 0 14px 16px; }
   .invoice-details-actions .admin-button { flex: 1; }
+  .customer-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .customer-toolbar { padding: 12px; }
+  .customer-toolbar .search-control { width: 100%; }
+  .customer-profile-dialog { width: 100%; max-width: 100%; max-height: 100dvh; height: 100dvh; margin: 0; border: 0; border-radius: 0; }
+  .customer-profile-content { padding: 14px; }
+  .customer-edit-fields { grid-template-columns: 1fr; }
+  .customer-address-field { grid-column: 1; }
+  .customer-profile-actions { align-items: stretch; flex-direction: column; }
+  .customer-profile-actions .admin-button { width: 100%; }
+  .customer-profile-dialog .admin-table { width: max-content; min-width: 100%; }
 }

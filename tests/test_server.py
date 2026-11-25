@@ -47,6 +47,8 @@ class FakeInvoiceConnection:
         self.statements = []
         self.quotes = {'ALIPEN-ABC123'}
         self.quote_status = {'ALIPEN-ABC123': 'new'}
+        self.quote_customers = {'ALIPEN-ABC123': (91, 'Buyer Clinic', 'buyer@example.com', '+254700000000', 'Buyer Clinic', datetime(2026, 1, 1, tzinfo=timezone.utc))}
+        self.customers = []
         self.invoices = {}
         self.items = {}
         self.next_id = 1
@@ -66,6 +68,19 @@ class FakeInvoiceConnection:
         self.result_one, self.result_all = None, []
         if upper.startswith('SELECT REFERENCE FROM QUOTE_REQUESTS'):
             self.result_one = (params[0],) if params[0] in self.quotes else None
+        elif upper.startswith('SELECT CUSTOMER_ID, NAME, EMAIL, PHONE, FACILITY, CREATED_AT FROM QUOTE_REQUESTS'):
+            self.result_one = self.quote_customers.get(params[0])
+        elif upper.startswith('UPDATE QUOTE_REQUESTS SET CUSTOMER_ID'):
+            quote = self.quote_customers.get(params[1])
+            if quote:
+                self.quote_customers[params[1]] = (params[0], *quote[1:])
+        elif upper.startswith('SELECT ID FROM CUSTOMERS WHERE LOWER(EMAIL)'):
+            customer = next((item for item in self.customers if item['email'].lower() == params[0]), None)
+            self.result_one = (customer['id'],) if customer else None
+        elif upper.startswith('INSERT INTO CUSTOMERS'):
+            customer_id = 100 + len(self.customers)
+            self.customers.append({'id': customer_id, 'name': params[0], 'email': params[1], 'phone': params[2]})
+            self.result_one = (customer_id,)
         elif upper.startswith('SELECT STATUS FROM QUOTE_REQUESTS'):
             self.result_one = (self.quote_status.get(params[0], 'new'),)
         elif upper.startswith('UPDATE QUOTE_REQUESTS SET STATUS = \'IN_PROGRESS\''):
@@ -85,6 +100,7 @@ class FakeInvoiceConnection:
             invoice = dict(zip(names, params[1:16]))
             invoice.update(id=self.next_id, invoice_number=number, status='new', amount_paid=Decimal('0.00'),
                            payment_date=None, payment_reference='', payment_note='', created_by=params[16],
+                           customer_id=params[17],
                            created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc), pdf_content=b'')
             self.next_id += 1
             self.invoices[invoice['id']] = invoice
@@ -199,10 +215,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(re.findall(r'data-quote-status="([^"]+)"', admin_html), ['new', 'in_progress', 'completed', 'lost'])
         self.assertRegex(admin_html, r'<input id="allRequestsFilter" type="checkbox"')
         self.assertRegex(admin_js, r"status: 'new', allQuotes: false")
-        script_version = 'admin.js?v=quote-tabs-20261125-1'
+        script_version = 'admin.js?v=crm-20261125-1'
         self.assertIn(script_version, admin_html)
         self.assertIn(script_version, login_html)
-        stylesheet_version = 'admin.css?v=quote-tabs-20261125-2'
+        stylesheet_version = 'admin.css?v=crm-20261125-1'
         self.assertIn(stylesheet_version, admin_html)
         self.assertIn(stylesheet_version, login_html)
         quote_buttons = re.findall(r'<button[^>]*data-quote-status="[^"]+"[^>]*>', admin_html)
@@ -485,6 +501,7 @@ class ServerTests(unittest.TestCase):
         with patch.object(server, 'database_connection', return_value=connection):
             quote_invoice = server.create_invoice(self.invoice_payload(quote_reference='ALIPEN-ABC123'), 'unit-admin')
             self.assertEqual(connection.quote_status['ALIPEN-ABC123'], 'in_progress')
+            self.assertEqual(connection.invoices[quote_invoice['id']]['customer_id'], 91)
             standalone = server.create_invoice(self.invoice_payload(quote_reference=None), 'unit-admin')
             self.assertNotEqual(quote_invoice['invoice_number'], standalone['invoice_number'])
             self.assertEqual(quote_invoice['quote_reference'], 'ALIPEN-ABC123')
@@ -541,6 +558,32 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(connection.quote_status['ALIPEN-ABC123'], 'in_progress')
         server.mark_invoice_paid(second['id'], 'REF-2', '', '2026-11-25')
         self.assertEqual(connection.quote_status['ALIPEN-ABC123'], 'completed')
+
+    def test_legacy_quote_without_customer_link_uses_invoice_contact_and_links_both_records(self):
+        connection = FakeInvoiceConnection()
+        connection.quote_customers['ALIPEN-ABC123'] = (None, 'Legacy Buyer', '', '', '', datetime(2020, 1, 1, tzinfo=timezone.utc))
+        with patch.object(server, 'database_connection', return_value=connection):
+            invoice = server.create_invoice(self.invoice_payload(quote_reference='ALIPEN-ABC123'), 'unit-admin')
+        customer_id = connection.invoices[invoice['id']]['customer_id']
+        self.assertIsNotNone(customer_id)
+        self.assertEqual(connection.quote_customers['ALIPEN-ABC123'][0], customer_id)
+        self.assertEqual(len(connection.customers), 1)
+
+    def test_customer_linkage_error_does_not_abort_quote_or_invoice_creation(self):
+        quote_connection = FakeConnection()
+        with patch.object(server, 'database_connection', return_value=quote_connection), \
+             patch.object(server, 'resolve_customer', side_effect=RuntimeError('simulated CRM lookup failure')):
+            reference = server.save_quote(self.valid_payload(), '127.0.0.1')
+        self.assertTrue(reference.startswith('ALIPEN-'))
+        self.assertTrue(any('INSERT INTO quote_requests' in sql for sql, _ in quote_connection.statements))
+
+        invoice_connection = FakeInvoiceConnection()
+        invoice_connection.quote_customers['ALIPEN-ABC123'] = (None, 'Legacy Buyer', '', '', '', datetime(2020, 1, 1, tzinfo=timezone.utc))
+        with patch.object(server, 'database_connection', return_value=invoice_connection), \
+             patch.object(server, 'resolve_customer', side_effect=RuntimeError('simulated CRM lookup failure')):
+            invoice = server.create_invoice(self.invoice_payload(quote_reference='ALIPEN-ABC123'), 'unit-admin')
+        self.assertIsNotNone(invoice['id'])
+        self.assertIsNone(invoice_connection.invoices[invoice['id']]['customer_id'])
 
     def test_standalone_invoice_does_not_change_quote_status(self):
         connection = FakeInvoiceConnection()
@@ -785,6 +828,7 @@ class ServerTests(unittest.TestCase):
 
     def test_database_initialization_creates_quote_table(self):
         server.init_database()
+        server.init_database()
         self.assertIn('CREATE TABLE IF NOT EXISTS quote_requests', self.db_connections[0].statements[0][0])
         self.assertTrue(any('CREATE TABLE IF NOT EXISTS admin_users' in statement for statement, _ in self.db_connections[0].statements))
         self.assertTrue(any('CREATE UNIQUE INDEX IF NOT EXISTS admin_users_username_lower_unique' in statement for statement, _ in self.db_connections[0].statements))
@@ -794,9 +838,16 @@ class ServerTests(unittest.TestCase):
         self.assertIn('quote_requests_follow_up_idx', migration_sql)
         self.assertIn('CREATE SEQUENCE IF NOT EXISTS alipen_invoice_number_seq', migration_sql)
         self.assertIn('CREATE TABLE IF NOT EXISTS invoices', migration_sql)
+        self.assertIn('CREATE TABLE IF NOT EXISTS customers', migration_sql)
+        self.assertIn('CREATE TABLE IF NOT EXISTS customer_notes', migration_sql)
+        self.assertIn('customers_email_lower_unique', migration_sql)
+        self.assertIn('quote_requests_customer_created_idx', migration_sql)
+        self.assertIn('invoices_customer_date_idx', migration_sql)
         self.assertIn('CREATE TABLE IF NOT EXISTS invoice_items', migration_sql)
         self.assertIn('NUMERIC(14, 2)', migration_sql)
         self.assertIn('CREATE INDEX IF NOT EXISTS invoice_items_invoice_position_idx', migration_sql)
+        second_run_sql = '\n'.join(statement for statement, _ in self.db_connections[1].statements)
+        self.assertIn('ADD COLUMN IF NOT EXISTS customer_id', second_run_sql)
 
     def test_admin_user_database_helpers_return_only_safe_fields(self):
         created_at = datetime.now(timezone.utc)
@@ -882,11 +933,126 @@ class ServerTests(unittest.TestCase):
         self.assertRegex(result['reference'], r'^ALIPEN-[A-F0-9]{6}$')
         self.assertEqual(result['emailDelivery'], {'admin': 'not_configured', 'customer': 'not_configured'})
         self.assertNotIn('test@example.com', result)
-        insert = self.db_connections[0].statements[0]
+        insert = next(statement for statement in self.db_connections[0].statements if 'INSERT INTO quote_requests' in statement[0])
         self.assertIn('INSERT INTO quote_requests', insert[0])
         self.assertIn("'new'", insert[0])
         self.assertEqual(insert[1][1], '<Test Contact>')
-        self.assertEqual(json.loads(insert[1][-2]), [{'name': 'Test ECG', 'quantity': 2}])
+        self.assertEqual(json.loads(insert[1][-3]), [{'name': 'Test ECG', 'quantity': 2}])
+
+    def test_customer_api_requires_admin_session_and_csrf(self):
+        for method, path in (
+            ('GET', '/api/admin/customers'), ('GET', '/api/admin/customers/7'),
+            ('GET', '/api/admin/customers/7/notes'), ('GET', '/api/admin/customer-notes/4'),
+            ('POST', '/api/admin/customers/7/notes'), ('PATCH', '/api/admin/customers/7'),
+            ('PATCH', '/api/admin/customer-notes/4'), ('DELETE', '/api/admin/customer-notes/4'),
+        ):
+            with self.subTest(method=method, path=path):
+                status, _, _ = self.request(method, path, {'content': 'private'} if method in ('POST', 'PATCH') else None)
+                self.assertEqual(status, 401)
+        status, _, _ = self.request('GET', '/api/customer-notes/4')
+        self.assertEqual(status, 404)
+        status, body, headers = self.admin_login()
+        cookie = headers.get('Set-Cookie').split(';', 1)[0]
+        csrf = json.loads(body)['csrfToken']
+        auth = {'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf}
+        status, _, _ = self.request('PATCH', '/api/admin/customers/7', {'full_name': 'Pat Example'}, {'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}'})
+        self.assertEqual(status, 403)
+        with patch.object(server, 'list_customers', return_value={'customers': [], 'total': 0, 'page': 1, 'pageSize': 20, 'summary': {'total': 0, 'new': 0, 'returning': 0, 'with_outstanding': 0}}) as listing:
+            status, body, _ = self.request('GET', '/api/admin/customers?search=pat&page=1', headers={'Cookie': cookie})
+        self.assertEqual(status, 200)
+        listing.assert_called_once_with('pat', 1)
+        with patch.object(server, 'update_customer', return_value=None) as update:
+            status, _, _ = self.request('PATCH', '/api/admin/customers/7', {
+                'full_name': 'Pat Example', 'email': 'pat@example.com', 'phone': '', 'company_name': '', 'customer_address': '',
+            }, {'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf})
+        self.assertEqual(status, 404)
+        update.assert_called_once_with(7, full_name='Pat Example', email='pat@example.com', phone='', company_name='', customer_address='')
+        invalid = {'full_name': 'Pat Example', 'email': 'pat@example.com', 'phone': 'abc', 'company_name': '', 'customer_address': ''}
+        status, _, _ = self.request('PATCH', '/api/admin/customers/7', invalid, auth)
+        self.assertEqual(status, 422)
+
+    def test_customer_note_routes_are_admin_only_and_csrf_protected(self):
+        status, _, _ = self.request('POST', '/api/admin/customers/7/notes', {'content': 'Private details'})
+        self.assertEqual(status, 401)
+        status, body, headers = self.admin_login()
+        cookie = headers.get('Set-Cookie').split(';', 1)[0]
+        csrf = json.loads(body)['csrfToken']
+        status, _, _ = self.request('POST', '/api/admin/customers/7/notes', {'content': 'Private details'}, {
+            'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}',
+        })
+        self.assertEqual(status, 403)
+        with patch.object(server, 'create_customer_note', return_value={'id': 4, 'author': 'unit-admin', 'content': 'Private details', 'created_at': '2026-11-25', 'updated_at': '2026-11-25'}) as create:
+            status, body, _ = self.request('POST', '/api/admin/customers/7/notes', {'content': 'Private details'}, {
+                'Cookie': cookie, 'Origin': f'http://127.0.0.1:{self.port}', 'X-CSRF-Token': csrf,
+            })
+        self.assertEqual(status, 201)
+        self.assertEqual(json.loads(body)['note']['content'], 'Private details')
+        create.assert_called_once_with(7, 'unit-admin', 'Private details')
+
+    def test_customer_link_schema_is_additive_and_email_identity_is_concurrency_safe(self):
+        source = (server.DIRECTORY / 'server.py').read_text(encoding='utf-8')
+        self.assertIn('CREATE TABLE IF NOT EXISTS customers', source)
+        self.assertIn('ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS customer_id', source)
+        self.assertIn('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS customer_id', source)
+        self.assertIn('ON CONFLICT (LOWER(email)) WHERE email <> \'\' DO NOTHING', source)
+        self.assertIn('CREATE TABLE IF NOT EXISTS customer_notes', source)
+        self.assertIn('REFERENCES customers(id) ON DELETE SET NULL', source)
+
+    def test_customer_identity_uses_email_first_and_phone_only_with_matching_unique_name(self):
+        class IdentityConnection:
+            def __init__(self):
+                self.customers = []
+                self.statements = []
+            def execute(self, query, params=None):
+                params = tuple(params or ())
+                sql = ' '.join(query.split())
+                self.statements.append((sql, params))
+                self.rows = []
+                self.row = None
+                if 'WHERE LOWER(email) = %s' in sql:
+                    self.row = next(((customer['id'],) for customer in self.customers if customer['email'].lower() == params[0]), None)
+                elif 'pg_advisory_xact_lock' in sql:
+                    pass
+                elif 'regexp_replace(phone' in sql:
+                    self.rows = [(customer['id'],) for customer in self.customers
+                                 if re.sub(r'\D', '', customer['phone']) == params[0]
+                                 and customer['name'].lower() == params[1].lower()][:2]
+                elif sql.startswith('INSERT INTO customers'):
+                    customer_id = len(self.customers) + 1
+                    self.customers.append({'id': customer_id, 'name': params[0], 'email': params[1], 'phone': params[2]})
+                    self.row = (customer_id,)
+                return self
+            def fetchone(self): return self.row
+            def fetchall(self): return self.rows
+
+        connection = IdentityConnection()
+        self.assertEqual(server.resolve_customer(connection, 'Alex Buyer', 'ALEX@example.com', '+254 711 111 111'), 1)
+        self.assertEqual(server.resolve_customer(connection, 'Different Name', 'alex@example.com', '+254 722 222 222'), 1)
+        self.assertEqual(len(connection.customers), 1)
+        self.assertEqual(server.resolve_customer(connection, 'Alex Buyer', '', '+254711111111'), 1)
+        self.assertEqual(server.resolve_customer(connection, 'Alex Buyer', 'alex-new@example.com', '+254711111111'), 1)
+        self.assertEqual(server.resolve_customer(connection, 'Other Person', '', '+254711111111'), 2)
+        self.assertTrue(any('pg_advisory_xact_lock' in sql for sql, _ in connection.statements))
+
+    def test_customer_balance_aggregates_use_recorded_amounts_without_status_double_counting(self):
+        class AggregateConnection:
+            def __init__(self): self.sql = []
+            def execute(self, query, params=None):
+                self.sql.append(' '.join(query.split()))
+                self.row = ('KES', Decimal('75.00'))
+                return self
+            def fetchall(self): return [self.row]
+            def fetchone(self): return (3, 1, 1, 2)
+
+        connection = AggregateConnection()
+        paid = server._customer_money_by_currency(connection, 5, paid=True)
+        outstanding = server._customer_money_by_currency(connection, 5)
+        self.assertEqual(paid, [{'currency': 'KES', 'amount': '75.00'}])
+        self.assertEqual(outstanding, [{'currency': 'KES', 'amount': '75.00'}])
+        self.assertNotIn("status <> 'paid'", connection.sql[1])
+        summary = server._customer_summary(connection)
+        self.assertEqual(summary, {'total': 3, 'new': 1, 'returning': 1, 'with_outstanding': 2})
+        self.assertNotIn("status <> 'paid'", connection.sql[2])
 
     def test_database_error_does_not_expose_customer_data(self):
         def fail_connect(*args, **kwargs):

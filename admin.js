@@ -5,7 +5,9 @@
     quoteDialogScrollY: 0, quoteDialogOriginalStyle: null, quoteDialogOriginalStyleCaptured: false,
     quoteDialogViewport: null, quoteDialogViewportSync: null,
     currentQuote: null, invoiceStatus: 'new', invoicePage: 1, invoicePageSize: 20,
-    invoiceTotal: 0, invoiceSearch: '', invoiceSearchTimer: null, invoiceProducts: [], invoiceEditing: null
+    invoiceTotal: 0, invoiceSearch: '', invoiceSearchTimer: null, invoiceProducts: [], invoiceEditing: null,
+    customerPage: 1, customerPageSize: 20, customerTotal: 0, customerSearch: '', customerSearchTimer: null,
+    customerLoadRequestId: 0, customerProfileRequestId: 0, currentCustomerId: null
   };
   const byId = (id) => document.getElementById(id);
 
@@ -311,6 +313,12 @@
     return invoiceMoneyCents(invoiceCents(value), currency);
   }
 
+  function invoiceBalance(total, paid, currency = 'KES') {
+    const totalCents = invoiceCents(total);
+    const paidCents = invoiceCents(paid);
+    return invoiceMoneyCents(totalCents > paidCents ? totalCents - paidCents : 0n, currency);
+  }
+
   function invoiceDateLabel(value) {
     if (!value) return '—';
     const date = new Date(`${value.slice(0, 10)}T12:00:00`);
@@ -393,6 +401,140 @@
     const next = byId('invoiceNextPage');
     if (previous) previous.disabled = state.invoicePage <= 1;
     if (next) next.disabled = last >= data.total;
+  }
+
+  function customerMoneyList(amounts) {
+    return (amounts || []).map((item) => invoiceMoney(item.amount, item.currency)).join(' · ') || '—';
+  }
+
+  async function loadCustomers() {
+    const requestId = ++state.customerLoadRequestId;
+    const query = new URLSearchParams({ search: state.customerSearch, page: String(state.customerPage) });
+    let data;
+    try { data = await api(`/customers?${query}`); }
+    catch (error) { if (requestId !== state.customerLoadRequestId) return; throw error; }
+    if (requestId !== state.customerLoadRequestId) return;
+    state.customerTotal = data.total;
+    const maxPage = Math.max(1, Math.ceil(data.total / state.customerPageSize));
+    if (state.customerPage > maxPage) { state.customerPage = maxPage; return loadCustomers(); }
+    const summary = data.summary || {};
+    setText('customerTotalCount', summary.total ?? 0);
+    setText('customerNewCount', summary.new ?? 0);
+    setText('customerReturningCount', summary.returning ?? 0);
+    setText('customerOutstandingCount', summary.with_outstanding ?? 0);
+    const host = byId('customerRows');
+    if (!host) throw new Error('Customer directory markup is missing #customerRows.');
+    host.replaceChildren();
+    (data.customers || []).forEach((customer) => {
+      const row = document.createElement('tr');
+      const identity = makeElement('td', 'customer-cell');
+      identity.append(makeElement('strong', '', customer.full_name));
+      identity.append(makeElement('span', '', [customer.email, customer.phone].filter(Boolean).join(' · ') || 'No contact details'));
+      row.append(identity);
+      addCell(row, invoiceDateLabel((customer.created_at || '').slice(0, 10)));
+      addCell(row, customer.quote_count);
+      addCell(row, customer.invoice_count);
+      addCell(row, customerMoneyList(customer.paid_amounts));
+      addCell(row, customerMoneyList(customer.outstanding_amounts));
+      const actionCell = document.createElement('td');
+      const open = makeElement('button', 'reference-link', 'Open profile');
+      open.type = 'button';
+      open.addEventListener('click', () => openCustomerProfile(customer.id));
+      actionCell.append(open);
+      row.append(actionCell);
+      host.append(row);
+    });
+    const empty = byId('customersEmpty');
+    if (empty) empty.hidden = (data.customers || []).length > 0;
+    const first = data.total ? ((state.customerPage - 1) * state.customerPageSize) + 1 : 0;
+    const last = Math.min(state.customerPage * state.customerPageSize, data.total);
+    setText('customerPageSummary', `Showing ${first}–${last} of ${data.total} customers`);
+    byId('customerPreviousPage').disabled = state.customerPage <= 1;
+    byId('customerNextPage').disabled = last >= data.total;
+  }
+
+  async function openCustomerProfile(customerId) {
+    const requestId = ++state.customerProfileRequestId;
+    try {
+      const profile = await api(`/customers/${encodeURIComponent(customerId)}`);
+      if (requestId !== state.customerProfileRequestId) return;
+      const customer = profile.customer;
+      state.currentCustomerId = customer.id;
+      setValue('customerProfileId', customer.id);
+      setValue('customerFullName', customer.full_name);
+      setValue('customerEmail', customer.email);
+      setValue('customerPhone', customer.phone);
+      setValue('customerCompany', customer.company_name);
+      setValue('customerAddress', customer.customer_address);
+      setText('customerAddedLabel', `Customer since ${invoiceDateLabel((customer.created_at || '').slice(0, 10))}`);
+      const quoteHost = byId('customerQuoteRows');
+      quoteHost.replaceChildren();
+      (profile.quotes || []).forEach((quote) => {
+        const row = document.createElement('tr');
+        const ref = document.createElement('td');
+        const button = makeElement('button', 'reference-link', quote.reference);
+        button.type = 'button'; button.addEventListener('click', () => { state.customerProfileRequestId += 1; byId('customerProfileDialog').close(); openQuote(quote.reference); }); ref.append(button); row.append(ref);
+        addCell(row, quote.facility); addCell(row, displayStatus(quote.status)); addCell(row, formatDate(quote.created_at)); quoteHost.append(row);
+      });
+      byId('customerQuotesEmpty').hidden = Boolean((profile.quotes || []).length);
+      const invoiceHost = byId('customerInvoiceRows');
+      invoiceHost.replaceChildren();
+      (profile.invoices || []).forEach((invoice) => {
+        const row = document.createElement('tr');
+        const number = document.createElement('td');
+        const button = makeElement('button', 'reference-link', invoice.invoice_number);
+        button.type = 'button'; button.addEventListener('click', () => { state.customerProfileRequestId += 1; byId('customerProfileDialog').close(); openInvoice(invoice.id); }); number.append(button); row.append(number);
+        addCell(row, invoiceMoney(invoice.total, invoice.currency));
+        const payments = [invoice.amount_paid && invoiceCents(invoice.amount_paid) > 0n ? `Paid ${invoiceMoney(invoice.amount_paid, invoice.currency)}` : '', invoice.status === 'paid' ? 'Paid' : 'Unpaid', invoice.payment_date ? invoiceDateLabel(invoice.payment_date) : '', invoice.payment_reference || ''].filter(Boolean);
+        addCell(row, payments.join(' · '));
+        addCell(row, invoiceBalance(invoice.total, invoice.amount_paid, invoice.currency)); invoiceHost.append(row);
+      });
+      byId('customerInvoicesEmpty').hidden = Boolean((profile.invoices || []).length);
+      renderCustomerNotes(profile.notes || []);
+      byId('customerNoteInput').value = '';
+      const dialog = byId('customerProfileDialog');
+      if (!dialog.open) dialog.showModal();
+    } catch (error) {
+      console.error('[Alipen admin] Customer profile could not be opened.', error);
+      showNotice(error.message, true);
+    }
+  }
+
+  function renderCustomerNotes(notes) {
+    const host = byId('customerNotesList');
+    host.replaceChildren();
+    (notes || []).forEach((note) => {
+      const card = makeElement('article', 'private-note');
+      const header = makeElement('div', 'private-note-header');
+      header.append(makeElement('strong', '', note.author), makeElement('time', '', formatDate(note.created_at)));
+      if (note.updated_at && note.updated_at !== note.created_at) header.append(makeElement('time', '', `Edited ${formatDate(note.updated_at)}`));
+      card.append(header, makeElement('p', '', note.content));
+      if (state.isPrimary || note.author === state.username) {
+        const actions = makeElement('div', 'private-note-actions');
+        const edit = makeElement('button', 'text-button', 'Edit'); edit.type = 'button';
+        edit.addEventListener('click', async () => {
+          const content = window.prompt('Edit private customer note', note.content);
+          if (content === null) return;
+          try { await api(`/customer-notes/${note.id}`, { method: 'PATCH', body: JSON.stringify({ content }) }); await refreshCustomerProfile(); }
+          catch (error) { showNotice(error.message, true); }
+        });
+        const remove = makeElement('button', 'text-button danger-text', 'Delete'); remove.type = 'button';
+        remove.addEventListener('click', async () => {
+          if (!window.confirm('Delete this private customer note?')) return;
+          try { await api(`/customer-notes/${note.id}`, { method: 'DELETE' }); await refreshCustomerProfile(); }
+          catch (error) { showNotice(error.message, true); }
+        });
+        actions.append(edit, remove); card.append(actions);
+      }
+      host.append(card);
+    });
+    if (!notes || !notes.length) host.append(makeElement('p', 'empty-note', 'No private notes yet.'));
+  }
+
+  async function refreshCustomerProfile() {
+    if (!state.currentCustomerId) return;
+    const profile = await api(`/customers/${encodeURIComponent(state.currentCustomerId)}`);
+    renderCustomerNotes(profile.notes || []);
   }
 
   function setInvoiceProducts() {
@@ -757,6 +899,7 @@
     byId('overviewView').hidden = name !== 'overview';
     byId('quotesView').hidden = name !== 'quotes';
     byId('documentsView').hidden = name !== 'documents';
+    byId('customersView').hidden = name !== 'customers';
     byId('usersView').hidden = name !== 'users';
     document.querySelectorAll('[data-admin-view]').forEach((button) => {
       button.classList.toggle('active', button.dataset.adminView === name);
@@ -767,6 +910,7 @@
     else if (name === 'quotes') loadQuotes().catch((error) => showNotice(error.message, true));
     else if (name === 'users') loadAdminUsers().catch((error) => showNotice(error.message, true));
     else if (name === 'documents') loadInvoices().catch((error) => showNotice(error.message, true));
+    else if (name === 'customers') loadCustomers().catch((error) => showNotice(error.message, true));
   }
 
   async function openQuote(reference) {
@@ -865,19 +1009,6 @@
   }
 
   async function initDashboard() {
-    try {
-      const session = await api('/session');
-      state.csrfToken = session.csrfToken;
-      state.isPrimary = Boolean(session.isPrimary);
-      state.username = session.username;
-      const usersNav = byId('adminUsersNav');
-      if (usersNav) usersNav.hidden = !state.isPrimary;
-      setText('adminUsernameLabel', session.username);
-    } catch (error) {
-      if (error.message) showNotice(error.message, true);
-      console.error('[Alipen admin] Dashboard session initialization failed', error);
-    }
-
     document.querySelectorAll('[data-admin-view]').forEach((button) => {
       button.addEventListener('click', () => showView(button.dataset.adminView));
     });
@@ -892,6 +1023,48 @@
       const sidebar = byId('adminSidebar');
       const open = sidebar.classList.toggle('open');
       byId('sidebarToggle').setAttribute('aria-expanded', String(open));
+    });
+
+    bind('customerSearch', 'input', () => {
+      clearTimeout(state.customerSearchTimer);
+      state.customerSearchTimer = setTimeout(() => {
+        state.customerSearch = byId('customerSearch').value.trim().slice(0, 120);
+        state.customerPage = 1;
+        loadCustomers().catch((error) => showNotice(error.message, true));
+      }, 250);
+    });
+    bind('customerPreviousPage', 'click', () => {
+      if (state.customerPage > 1) { state.customerPage -= 1; loadCustomers().catch((error) => showNotice(error.message, true)); }
+    });
+    bind('customerNextPage', 'click', () => {
+      if (state.customerPage * state.customerPageSize < state.customerTotal) { state.customerPage += 1; loadCustomers().catch((error) => showNotice(error.message, true)); }
+    });
+    bind('closeCustomerProfile', 'click', () => { state.customerProfileRequestId += 1; byId('customerProfileDialog').close(); });
+    bind('customerEditForm', 'submit', async (event) => {
+      event.preventDefault();
+      const id = state.currentCustomerId;
+      const button = event.currentTarget.querySelector('[type="submit"]');
+      button.disabled = true;
+      try {
+        await api(`/customers/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({
+          full_name: byId('customerFullName').value, email: byId('customerEmail').value,
+          phone: byId('customerPhone').value, company_name: byId('customerCompany').value,
+          customer_address: byId('customerAddress').value
+        }) });
+        await loadCustomers();
+        showNotice('Customer contact details saved. Historical quote and invoice details remain unchanged.');
+      } catch (error) { showNotice(error.message, true); }
+      finally { button.disabled = false; }
+    });
+    bind('customerNoteForm', 'submit', async (event) => {
+      event.preventDefault();
+      if (!state.currentCustomerId) return;
+      const content = byId('customerNoteInput').value;
+      try {
+        await api(`/customers/${encodeURIComponent(state.currentCustomerId)}/notes`, { method: 'POST', body: JSON.stringify({ content }) });
+        byId('customerNoteInput').value = '';
+        await refreshCustomerProfile();
+      } catch (error) { showNotice(error.message, true); }
     });
 
     bind('quoteSearch', 'input', () => {
@@ -1188,8 +1361,20 @@
       } finally { button.disabled = false; }
     });
 
-    // Attach interactions before loading dashboard data. Rendering/API errors
-    // must never leave navigation, filtering, or logout inert.
+    // All page controls are live before authentication or optional data loads.
+    try {
+      const session = await api('/session');
+      state.csrfToken = session.csrfToken;
+      state.isPrimary = Boolean(session.isPrimary);
+      state.username = session.username;
+      const usersNav = byId('adminUsersNav');
+      if (usersNav) usersNav.hidden = !state.isPrimary;
+      setText('adminUsernameLabel', session.username);
+    } catch (error) {
+      if (error.message) showNotice(error.message, true);
+      console.error('[Alipen admin] Dashboard session initialization failed', error);
+      return;
+    }
     loadOverview().catch((error) => {
       console.error('[Alipen admin] Dashboard overview request failed', error);
       showNotice(error.message || 'Could not load the dashboard overview.', true);
