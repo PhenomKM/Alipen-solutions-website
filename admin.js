@@ -1204,9 +1204,9 @@
         await loadQuotes();
       } catch (error) { showNotice(error.message, true); }
     });
-    if (state.isPrimary) {
       bind('createAdminUserForm', 'submit', async (event) => {
         event.preventDefault();
+        if (!state.isPrimary) return;
         const form = event.currentTarget;
         const button = byId('createAdminUserButton');
         const formData = new FormData(form);
@@ -1225,10 +1225,15 @@
           button.disabled = false;
         }
       });
-      bind('closeAdminUserDialog', 'click', () => byId('adminUserDialog')?.close());
-      bind('cancelAdminUserEdit', 'click', () => byId('adminUserDialog')?.close());
+      const closeAdminUserDialog = () => {
+        byId('editAdminUserForm')?.reset();
+        byId('adminUserDialog')?.close();
+      };
+      bind('closeAdminUserDialog', 'click', closeAdminUserDialog);
+      bind('cancelAdminUserEdit', 'click', closeAdminUserDialog);
       bind('editAdminUserForm', 'submit', async (event) => {
         event.preventDefault();
+        if (!state.isPrimary) return;
         const form = event.currentTarget;
         const formData = new FormData(form);
         const activeCheckbox = form.elements.namedItem('is_active');
@@ -1255,7 +1260,6 @@
           button.disabled = false;
         }
       });
-    }
     bind('statusForm', 'submit', (event) => event.preventDefault());
     bind('markQuoteLost', 'click', () => { setValue('lostReason', ''); setValue('lostExplanation', ''); byId('lostQuoteDialog').showModal(); });
     bind('closeLostQuote', 'click', () => byId('lostQuoteDialog').close());

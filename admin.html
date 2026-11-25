@@ -190,7 +190,7 @@
     <form id="lostQuoteForm"><label>Reason (optional)<select id="lostReason"><option value="">Choose a reason</option><option>Price too high</option><option>Customer cancelled</option><option>Customer chose another supplier</option><option>No response</option><option>Other</option></select></label><label>Additional explanation (optional)<textarea id="lostExplanation" maxlength="2000" rows="3"></textarea></label><div class="user-edit-actions"><button id="cancelLostQuote" class="admin-button" type="button">Cancel</button><button id="confirmLostQuote" class="admin-button admin-button-primary" type="submit">Mark as Lost</button></div></form>
   </dialog>
   <dialog id="adminUserDialog" class="detail-dialog admin-user-dialog" aria-labelledby="adminUserDialogTitle">
-    <div class="dialog-heading"><div><span class="page-eyebrow">ACCESS CONTROL</span><h2 id="adminUserDialogTitle">Edit administrator</h2></div><button id="closeAdminUserDialog" class="dialog-close" type="button" aria-label="Close account editor">Close</button></div>
+    <div class="dialog-heading"><div><span class="page-eyebrow">ACCESS CONTROL</span><h2 id="adminUserDialogTitle">Edit administrator</h2></div><button id="closeAdminUserDialog" class="dialog-close" type="button" aria-label="Close">×</button></div>
     <form id="editAdminUserForm" class="admin-user-edit-form">
       <input name="id" type="hidden" />
       <label>Username<input name="username" type="text" minlength="3" maxlength="120" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,119}" required /></label>

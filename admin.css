@@ -187,6 +187,8 @@ button { cursor: pointer; }
 .dialog-heading { position: sticky; top: 0; z-index: 1; display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 20px 23px; border-bottom: 1px solid var(--admin-line); background: #fff; }
 .dialog-heading h2 { margin: 5px 0 0; font-size: 20px; letter-spacing: -.035em; }
 .dialog-close { width: 35px; height: 35px; border: 0; border-radius: 8px; background: #f1f5f9; color: #475569; font-size: 22px; }
+.dialog-close:hover { background: #e2e8f0; color: #1e293b; }
+.dialog-close:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
 .detail-loading { padding: 30px 24px; color: var(--admin-muted); }
 #quoteDetailDialog > #detailLoading, #quoteDetailDialog > #detailContent { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .detail-reference { display: flex; align-items: center; gap: 10px; padding: 17px 23px; background: #f8fafc; color: #64748b; font-size: 11px; }
