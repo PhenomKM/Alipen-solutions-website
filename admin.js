@@ -4,7 +4,7 @@
     csrfToken: '', page: 1, pageSize: 20, total: 0, search: '', status: 'new', allQuotes: false, dateFrom: '', dateTo: '', followUp: 'all', currentReference: '', isPrimary: false, username: '',
     quoteDialogScrollY: 0, quoteDialogOriginalStyle: null, quoteDialogOriginalStyleCaptured: false,
     quoteDialogViewport: null, quoteDialogViewportSync: null,
-    currentQuote: null, invoiceStatus: 'new', invoicePage: 1, invoicePageSize: 20,
+    currentQuote: null, quoteFiltersOpen: false, invoiceStatus: 'new', invoicePage: 1, invoicePageSize: 20,
     invoiceTotal: 0, invoiceSearch: '', invoiceSearchTimer: null, invoiceProducts: [], invoiceEditing: null,
     customerPage: 1, customerPageSize: 20, customerTotal: 0, customerSearch: '', customerSearchTimer: null,
     customerLoadRequestId: 0, customerProfileRequestId: 0, currentCustomerId: null
@@ -63,6 +63,30 @@
   function clearNotice() {
     const notice = byId('adminNotice');
     if (notice) notice.hidden = true;
+  }
+
+  function syncQuoteFilterPanel() {
+    const toggle = byId('quoteFiltersToggle');
+    const panel = byId('quoteFiltersPanel');
+    if (!toggle || !panel) return;
+    const mobile = window.matchMedia('(max-width: 720px)').matches;
+    const allRequests = byId('allRequestsFilter');
+    const followUp = byId('followUpFilter');
+    const fromDate = byId('dateFromFilter');
+    const toDate = byId('dateToFilter');
+    const active = Boolean(
+      (allRequests && allRequests.checked)
+      || (followUp && followUp.checked)
+      || (fromDate && fromDate.value)
+      || (toDate && toDate.value)
+    );
+    toggle.hidden = !mobile;
+    panel.hidden = mobile && !state.quoteFiltersOpen;
+    toggle.setAttribute('aria-expanded', String(mobile && state.quoteFiltersOpen));
+    toggle.setAttribute('aria-pressed', String(active));
+    toggle.classList.toggle('has-active-filters', active);
+    const indicator = byId('quoteFilterActiveIndicator');
+    if (indicator) indicator.hidden = !active;
   }
 
   async function api(path, options = {}) {
@@ -894,7 +918,9 @@
       state.page = 1;
       const allRequests = byId('allRequestsFilter');
       if (allRequests) allRequests.checked = false;
+      state.quoteFiltersOpen = false;
     }
+    syncQuoteFilterPanel();
     const overview = name === 'overview';
     byId('overviewView').hidden = name !== 'overview';
     byId('quotesView').hidden = name !== 'quotes';
@@ -1024,6 +1050,8 @@
       const open = sidebar.classList.toggle('open');
       byId('sidebarToggle').setAttribute('aria-expanded', String(open));
     });
+    window.addEventListener('resize', syncQuoteFilterPanel);
+    syncQuoteFilterPanel();
 
     bind('customerSearch', 'input', () => {
       clearTimeout(state.customerSearchTimer);
@@ -1075,21 +1103,28 @@
         loadQuotes().catch((error) => showNotice(error.message, true));
       }, 250);
     });
+    bind('quoteFiltersToggle', 'click', () => {
+      state.quoteFiltersOpen = !state.quoteFiltersOpen;
+      syncQuoteFilterPanel();
+    });
     document.querySelectorAll('[data-quote-status]').forEach((tab) => tab.addEventListener('click', () => {
       selectQuoteStatus(tab.dataset.quoteStatus);
       state.allQuotes = false;
       byId('allRequestsFilter').checked = false;
+      syncQuoteFilterPanel();
       state.page = 1;
       loadQuotes().catch((error) => showNotice(error.message, true));
     }));
     bind('allRequestsFilter', 'change', () => {
       state.allQuotes = byId('allRequestsFilter').checked;
+      syncQuoteFilterPanel();
       state.page = 1;
       loadQuotes().catch((error) => showNotice(error.message, true));
     });
     const applyDateFilters = () => {
       state.dateFrom = byId('dateFromFilter').value;
       state.dateTo = byId('dateToFilter').value;
+      syncQuoteFilterPanel();
       state.page = 1;
       loadQuotes().catch((error) => showNotice(error.message, true));
     };
@@ -1097,6 +1132,7 @@
     bind('dateToFilter', 'change', applyDateFilters);
     bind('followUpFilter', 'change', () => {
       state.followUp = byId('followUpFilter').checked ? 'due' : 'all';
+      syncQuoteFilterPanel();
       state.page = 1;
       loadQuotes().catch((error) => showNotice(error.message, true));
     });
@@ -1115,6 +1151,8 @@
       setValue('dateToFilter', '');
       byId('followUpFilter').checked = false;
       byId('allRequestsFilter').checked = true;
+      state.quoteFiltersOpen = false;
+      syncQuoteFilterPanel();
       loadQuotes().catch((error) => showNotice(error.message, true));
     });
     bind('previousPage', 'click', () => {

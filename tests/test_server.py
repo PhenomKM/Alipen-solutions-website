@@ -215,10 +215,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(re.findall(r'data-quote-status="([^"]+)"', admin_html), ['new', 'in_progress', 'completed', 'lost'])
         self.assertRegex(admin_html, r'<input id="allRequestsFilter" type="checkbox"')
         self.assertRegex(admin_js, r"status: 'new', allQuotes: false")
-        script_version = 'admin.js?v=crm-20261125-1'
+        script_version = 'admin.js?v=crm-20261125-2'
         self.assertIn(script_version, admin_html)
         self.assertIn(script_version, login_html)
-        stylesheet_version = 'admin.css?v=crm-20261125-1'
+        stylesheet_version = 'admin.css?v=crm-20261125-2'
         self.assertIn(stylesheet_version, admin_html)
         self.assertIn(stylesheet_version, login_html)
         quote_buttons = re.findall(r'<button[^>]*data-quote-status="[^"]+"[^>]*>', admin_html)

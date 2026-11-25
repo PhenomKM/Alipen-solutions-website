@@ -7,9 +7,9 @@
   <meta name="robots" content="noindex, nofollow" />
   <title>Quote Management | Alipen Solutions</title>
   <link rel="icon" type="image/png" href="public/images/favicon.png" />
-  <link rel="stylesheet" href="admin.css?v=crm-20261125-1" />
+  <link rel="stylesheet" href="admin.css?v=crm-20261125-2" />
   <script src="products.js" defer></script>
-  <script src="admin.js?v=crm-20261125-1" defer></script>
+  <script src="admin.js?v=crm-20261125-2" defer></script>
   <script src="admin-diagnostics-loader.js" defer></script>
 </head>
 <body class="admin-app" data-admin-page="dashboard">
@@ -82,13 +82,18 @@
           </div>
           <section class="admin-panel quote-list-panel">
             <div class="quote-toolbar">
-              <label class="search-control"><span class="sr-only">Search quote requests</span><span aria-hidden="true">⌕</span><input id="quoteSearch" type="search" maxlength="120" placeholder="Search customer, company, email or reference" /></label>
-              <div class="quote-status-tabs" role="tablist" aria-label="Quote request status"><button type="button" class="invoice-tab quote-status-tab active" data-quote-status="new" role="tab" aria-selected="true" aria-controls="quoteRows">New <span id="quoteCountNew">0</span></button><button type="button" class="invoice-tab quote-status-tab" data-quote-status="in_progress" role="tab" aria-selected="false" aria-controls="quoteRows">In Progress <span id="quoteCountProgress">0</span></button><button type="button" class="invoice-tab quote-status-tab" data-quote-status="completed" role="tab" aria-selected="false" aria-controls="quoteRows">Completed <span id="quoteCountCompleted">0</span></button><button type="button" class="invoice-tab quote-status-tab" data-quote-status="lost" role="tab" aria-selected="false" aria-controls="quoteRows">Lost <span id="quoteCountLost">0</span></button></div>
-              <label class="all-requests-filter"><input id="allRequestsFilter" type="checkbox" /> <span>All Requests</span></label>
-              <label class="date-filter">From<input id="dateFromFilter" type="date" aria-label="Submitted from date" /></label>
-              <label class="date-filter">To<input id="dateToFilter" type="date" aria-label="Submitted to date" /></label>
-              <label class="followup-filter"><input id="followUpFilter" type="checkbox" /> Due / overdue</label>
-              <button id="clearFilters" class="admin-button" type="button">Clear filters</button>
+              <label class="search-control quote-search"><span class="sr-only">Search quote requests</span><span aria-hidden="true">⌕</span><input id="quoteSearch" type="search" maxlength="120" placeholder="Search customer, company, email or reference" /></label>
+              <div class="quote-toolbar-row">
+                <div class="quote-status-tabs" role="tablist" aria-label="Quote request status"><button type="button" class="invoice-tab quote-status-tab active" data-quote-status="new" role="tab" aria-selected="true" aria-controls="quoteRows">New <span id="quoteCountNew">0</span></button><button type="button" class="invoice-tab quote-status-tab" data-quote-status="in_progress" role="tab" aria-selected="false" aria-controls="quoteRows">In Progress <span id="quoteCountProgress">0</span></button><button type="button" class="invoice-tab quote-status-tab" data-quote-status="completed" role="tab" aria-selected="false" aria-controls="quoteRows">Completed <span id="quoteCountCompleted">0</span></button><button type="button" class="invoice-tab quote-status-tab" data-quote-status="lost" role="tab" aria-selected="false" aria-controls="quoteRows">Lost <span id="quoteCountLost">0</span></button></div>
+                <button id="quoteFiltersToggle" class="quote-filters-toggle" type="button" aria-controls="quoteFiltersPanel" aria-expanded="false" aria-pressed="false">Filters <span id="quoteFilterActiveIndicator" class="quote-filter-active-indicator" hidden>Active</span></button>
+                <div id="quoteFiltersPanel" class="quote-filter-panel">
+                  <label class="all-requests-filter"><input id="allRequestsFilter" type="checkbox" /> <span>All Requests</span></label>
+                  <label class="date-filter">From<input id="dateFromFilter" type="date" aria-label="Submitted from date" /></label>
+                  <label class="date-filter">To<input id="dateToFilter" type="date" aria-label="Submitted to date" /></label>
+                  <label class="followup-filter"><input id="followUpFilter" type="checkbox" /> Due / overdue</label>
+                  <button id="clearFilters" class="admin-button quote-clear-filters" type="button">Clear filters</button>
+                </div>
+              </div>
             </div>
             <div class="table-scroll"><table class="admin-table"><thead><tr><th>Reference</th><th>Customer</th><th>Facility</th><th>County</th><th>Status</th><th>Date received</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="quoteRows"></tbody></table></div>
             <p id="quotesEmpty" class="empty-state" hidden>No quote requests match these filters.</p>
