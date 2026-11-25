@@ -22,20 +22,23 @@ class AdminUserDialogRegressionTests(unittest.TestCase):
             r'<button class="admin-button" id="cancelAdminUserEdit" type="button">Cancel</button>',
         )
 
-    def test_dialog_controls_are_bound_before_session_role_is_loaded(self):
-        session_load = self.js.index("const session = await api('/session')")
-        setup_before_session = self.js[:session_load]
-        self.assertNotIn('if (state.isPrimary)', setup_before_session)
-        for control_id in ('closeAdminUserDialog', 'cancelAdminUserEdit', 'editAdminUserForm'):
-            with self.subTest(control_id=control_id):
-                self.assertIn(f"bind('{control_id}'", setup_before_session)
+    def test_admin_bundle_url_changes_to_invalidate_previous_browser_cache(self):
+        self.assertIn('admin.js?v=crm-20261125-3', self.html)
+
+    def test_close_handler_is_delegated_after_dom_ready_before_dashboard_init(self):
+        ready_listener = self.js.index("document.addEventListener('DOMContentLoaded'")
+        dashboard_init = self.js.index('initDashboard();', ready_listener)
+        setup = self.js[ready_listener:dashboard_init]
+        self.assertIn("document.addEventListener('click'", setup)
+        self.assertIn("target.closest('#closeAdminUserDialog, #cancelAdminUserEdit')", setup)
+        self.assertIn('}, true);', setup)
 
     def test_admin_writes_still_check_the_loaded_primary_role(self):
-        self.assertIn("if (!state.isPrimary) return;", self.js)
+        self.assertGreaterEqual(self.js.count("if (!state.isPrimary) return;"), 2)
 
     def test_cancel_resets_unsaved_values_and_only_closes_dialog(self):
         close_action = re.search(
-            r'const closeAdminUserDialog = \(\) => \{(?P<body>.*?)\n\s*\};',
+            r'function closeAdminUserEditor\(\) \{(?P<body>.*?)\n\s*\}',
             self.js,
             re.S,
         )
@@ -43,9 +46,6 @@ class AdminUserDialogRegressionTests(unittest.TestCase):
         self.assertIn("byId('editAdminUserForm')?.reset()", close_action['body'])
         self.assertIn("byId('adminUserDialog')?.close()", close_action['body'])
         self.assertNotIn('api(', close_action['body'])
-        self.assertIn(
-            "bind('cancelAdminUserEdit', 'click', closeAdminUserDialog)", self.js
-        )
 
 
 if __name__ == '__main__':

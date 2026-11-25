@@ -910,6 +910,11 @@
     byId('adminUserDialog').showModal();
   }
 
+  function closeAdminUserEditor() {
+    byId('editAdminUserForm')?.reset();
+    byId('adminUserDialog')?.close();
+  }
+
   function showView(name) {
     if (name === 'users' && !state.isPrimary) return;
     if (name === 'quotes') {
@@ -1225,12 +1230,6 @@
           button.disabled = false;
         }
       });
-      const closeAdminUserDialog = () => {
-        byId('editAdminUserForm')?.reset();
-        byId('adminUserDialog')?.close();
-      };
-      bind('closeAdminUserDialog', 'click', closeAdminUserDialog);
-      bind('cancelAdminUserEdit', 'click', closeAdminUserDialog);
       bind('editAdminUserForm', 'submit', async (event) => {
         event.preventDefault();
         if (!state.isPrimary) return;
@@ -1425,6 +1424,17 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     if (document.body.dataset.adminPage === 'login') initLogin();
-    if (document.body.dataset.adminPage === 'dashboard') initDashboard();
+    if (document.body.dataset.adminPage === 'dashboard') {
+      // Bind at the document level so clicks still reach the close action if
+      // account controls are replaced or dashboard initialization is delayed.
+      document.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        if (!target.closest('#closeAdminUserDialog, #cancelAdminUserEdit')) return;
+        event.preventDefault();
+        closeAdminUserEditor();
+      }, true);
+      initDashboard();
+    }
   });
 })();
